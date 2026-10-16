@@ -10,7 +10,7 @@ from motion_analysis import load_human, load_play, global_metrics, speed
 OUT = _os.path.join(PROJECT, "artifact_composed")
 logs = {json.loads(l)["ep"]: json.loads(l) for l in open("../showcase_play/log.jsonl")}
 # episodes chosen to show each kind of play (fixtures, drawers, stacking, ...)
-chosen = [ep for ep in (0, 2, 7, 13, 14, 8, 16, 17) if ep in logs]
+chosen = [ep for ep in (0, 2, 7, 15, 4, 1, 17, 20) if ep in logs]
 eps = []
 for ep in chosen:
     r = logs[ep]
@@ -30,7 +30,7 @@ for ep in chosen:
                     phase=[phases[i] for i in ph[::2]]))
 # high-error episodes (--p_err 1.0 --err_severity 1.0), shown separately; not in the stats
 hlogs = {json.loads(l)["ep"]: json.loads(l) for l in open("../showcase_hierr/log.jsonl")}
-for ep in (4, 3, 2, 5, 1, 0, 6, 7):
+for ep in (5, 4, 2, 3, 1, 0, 6, 7):
     r = hlogs[ep]
     with h5py.File(f"../showcase_hierr/episode_{ep:06d}.hdf5") as f:
         g = f["data/demo_0"]
