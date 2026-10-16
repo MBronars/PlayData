@@ -4,5 +4,6 @@
 !/.gitignore
 !/README.md
 !/play/
+!/robotwin_play/
 __pycache__/
 *.pyc
