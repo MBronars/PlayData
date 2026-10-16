@@ -1,0 +1,70 @@
+diff --git a/robosuite/controllers/joint_pos.py b/robosuite/controllers/joint_pos.py
+index 054f1c71..e849af98 100644
+--- a/robosuite/controllers/joint_pos.py
++++ b/robosuite/controllers/joint_pos.py
+@@ -178,6 +178,8 @@ class JointPositionController(Controller):
+         """
+         # Update state
+         self.update()
++        
++        set_qpos = action
+ 
+         # Parse action based on the impedance mode, and update kp / kd as necessary
+         jnt_dim = len(self.qpos_index)
+diff --git a/robosuite/controllers/joint_vel.py b/robosuite/controllers/joint_vel.py
+index 20ae9946..8305c7a9 100644
+--- a/robosuite/controllers/joint_vel.py
++++ b/robosuite/controllers/joint_vel.py
+@@ -65,8 +65,8 @@ class JointVelocityController(Controller):
+         actuator_range,
+         input_max=1,
+         input_min=-1,
+-        output_max=1,
+-        output_min=-1,
++        output_max=3,
++        output_min=-3,
+         kp=0.25,
+         policy_freq=20,
+         velocity_limits=None,
+diff --git a/robosuite/environments/base.py b/robosuite/environments/base.py
+index 62752b2f..799744f0 100644
+--- a/robosuite/environments/base.py
++++ b/robosuite/environments/base.py
+@@ -297,8 +297,8 @@ class MujocoEnv(metaclass=EnvMeta):
+         if self.has_offscreen_renderer:
+             if self.sim._render_context_offscreen is None:
+                 render_context = MjRenderContextOffscreen(self.sim, device_id=self.render_gpu_device_id)
+-            self.sim._render_context_offscreen.vopt.geomgroup[0] = 1 if self.render_collision_mesh else 0
+-            self.sim._render_context_offscreen.vopt.geomgroup[1] = 1 if self.render_visual_mesh else 0
++            self.sim._render_context_offscreen.vopt.geomgroup[0] = 0 #1 if self.render_collision_mesh else 0
++            self.sim._render_context_offscreen.vopt.geomgroup[1] = 1 #1 if self.render_visual_mesh else 0
+ 
+         # additional housekeeping
+         self.sim_state_initial = self.sim.get_state()
+diff --git a/robosuite/models/robots/manipulators/panda_robot.py b/robosuite/models/robots/manipulators/panda_robot.py
+index 336440da..3a58c53e 100644
+--- a/robosuite/models/robots/manipulators/panda_robot.py
++++ b/robosuite/models/robots/manipulators/panda_robot.py
+@@ -24,7 +24,8 @@ class Panda(ManipulatorModel):
+ 
+     @property
+     def default_gripper(self):
+-        return "PandaGripper"
++        return "Robotiq85Gripper"
++        # return "PandaGripper"
+ 
+     @property
+     def default_controller_config(self):
+diff --git a/robosuite/renderers/nvisii/parser.py b/robosuite/renderers/nvisii/parser.py
+index b184cef1..50c5d151 100644
+--- a/robosuite/renderers/nvisii/parser.py
++++ b/robosuite/renderers/nvisii/parser.py
+@@ -97,7 +97,7 @@ class Parser(BaseParser):
+ 
+             if (geom.get("group") != "1" and geom_type != "plane") or ("collision" in geom_name):
+                 continue
+-
++            
+             if "floor" in geom_name or "wall" in geom_name or geom_name in block_rendering_objects:
+                 continue
+ 

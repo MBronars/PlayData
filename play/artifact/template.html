@@ -1,0 +1,386 @@
+<title>LIBERO Composed Play</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=Public+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: single reading column (max 1080px) — episode viewer first, evidence after, method last. */
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --ink: #14171c; --ink-2: #4a5160; --ink-3: #7a8191;
+  --line: #e1e4ea; --accent: #2a78d6;
+  --human: #2a78d6; --play: #eb6834; --scripted: #6250d6;
+  --ok: #1b8a5a; --bad: #c43d3d;
+  --p-approach: #2a78d6; --p-transport: #eb6834; --p-transit: #1baf7a; --p-articulate: #6250d6;
+  --p-regrasp: #eda100; --p-correct: #e87ba4; --p-gripper: #9aa1ae; --p-other: #c9ced8; --p-grasp: #e34948; --p-release: #008300; --p-retreat: #9aa1ae;
+  --f-display: "Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+  --f-body: "Public Sans", "Segoe UI", system-ui, sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #121418; --panel: #1b1e24; --ink: #eef0f3; --ink-2: #b7bdc8; --ink-3: #8a91a0; --line: #2c313a;
+  --accent: #3987e5; --human: #3987e5; --play: #d95926; --scripted: #9085e9; --ok: #3cb37f; --bad: #e66767;
+  --p-approach: #3987e5; --p-transport: #d95926; --p-transit: #199e70; --p-articulate: #9085e9;
+  --p-regrasp: #c98500; --p-correct: #d55181; --p-gripper: #6b7280; --p-other: #3a404b; --p-grasp: #e66767; --p-release: #2f9e2f; --p-retreat: #6b7280; color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --bg: #121418; --panel: #1b1e24; --ink: #eef0f3; --ink-2: #b7bdc8; --ink-3: #8a91a0; --line: #2c313a;
+  --accent: #3987e5; --human: #3987e5; --play: #d95926; --scripted: #9085e9; --ok: #3cb37f; --bad: #e66767;
+  --p-approach: #3987e5; --p-transport: #d95926; --p-transit: #199e70; --p-articulate: #9085e9;
+  --p-regrasp: #c98500; --p-correct: #d55181; --p-gripper: #6b7280; --p-other: #3a404b; --p-grasp: #e66767; --p-release: #2f9e2f; --p-retreat: #6b7280; color-scheme: dark; }
+body { background: var(--bg); color: var(--ink); font-family: var(--f-body); font-size: 15px; line-height: 1.55; }
+.wrap { max-width: 1080px; margin: 0 auto; padding-block: 28px 64px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: flex; flex-direction: column; gap: 40px; }
+h1, h2, h3 { font-family: var(--f-display); text-wrap: balance; margin: 0; letter-spacing: -0.01em; }
+h1 { font-size: clamp(30px, 5vw, 44px); font-weight: 700; }
+h2 { font-size: 24px; font-weight: 700; }
+h3 { font-size: 16px; font-weight: 600; }
+p { margin: 0; max-width: 68ch; color: var(--ink-2); }
+.eyebrow { font-family: var(--f-mono); font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); }
+header { display: flex; flex-direction: column; gap: 12px; }
+.mono { font-family: var(--f-mono); font-variant-numeric: tabular-nums; }
+section { display: flex; flex-direction: column; gap: 16px; }
+.facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
+.fact { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.fact b { font-family: var(--f-display); font-size: 28px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.fact span { font-size: 13px; color: var(--ink-2); }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip { font: 500 13px var(--f-body); border: 1px solid var(--line); background: var(--bg); color: var(--ink); border-radius: 999px; padding: 6px 12px; cursor: pointer; }
+.chip[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.chip:focus-visible, button:focus-visible, .seg:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.viewer { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 16px; }
+@media (max-width: 760px) { .viewer { grid-template-columns: 1fr; } }
+video { width: 100%; max-width: 100%; border-radius: 8px; background: #000; image-rendering: pixelated; display: block; }
+.camlabels { display: grid; grid-template-columns: 1fr 1fr; font-size: 12px; color: var(--ink-3); font-family: var(--f-mono); }
+.meta { font-size: 13px; color: var(--ink-2); }
+.timeline { position: relative; height: 26px; border-radius: 6px; overflow: hidden; background: var(--bg); cursor: pointer; }
+.timeline .ph { position: absolute; top: 0; bottom: 0; }
+.cursor { position: absolute; top: -2px; bottom: -2px; width: 2px; background: var(--ink); pointer-events: none; }
+.legend { display: flex; flex-wrap: wrap; gap: 10px 14px; font-size: 12px; color: var(--ink-2); }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+.seglist { display: flex; flex-direction: column; gap: 6px; max-height: 420px; overflow-y: auto; }
+.seg { display: grid; grid-template-columns: 64px 1fr auto; gap: 10px; align-items: start; text-align: left; border: 1px solid var(--line); background: var(--bg); color: var(--ink); border-radius: 8px; padding: 8px 10px; cursor: pointer; font: inherit; }
+.seg.active { border-color: var(--accent); }
+.seg .t { font-family: var(--f-mono); font-size: 12px; color: var(--ink-3); padding-top: 2px; }
+.seg .l { font-size: 14px; min-width: 0; }
+.seg .s { font-size: 12px; color: var(--ink-3); display: block; overflow-wrap: anywhere; }
+.pill { font: 500 11px var(--f-mono); border-radius: 999px; padding: 2px 8px; white-space: nowrap; border: 1px solid currentColor; }
+.pill.ok { color: var(--ok); } .pill.no { color: var(--bad); }
+.humans { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.humans figure { margin: 0; display: flex; flex-direction: column; gap: 6px; }
+.humans figcaption { font-size: 13px; color: var(--ink-2); }
+.chart { width: 100%; overflow-x: auto; }
+.chart svg { display: block; width: 100%; height: auto; min-width: 520px; }
+.chart text { fill: var(--ink-2); font-family: var(--f-body); font-size: 12px; }
+.chart .val { fill: var(--ink); font-family: var(--f-mono); }
+.chart .grid { stroke: var(--line); }
+.tip { position: fixed; pointer-events: none; background: var(--ink); color: var(--bg); font-size: 12px; padding: 6px 8px; border-radius: 6px; z-index: 10; max-width: 260px; }
+.tablewrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 14px; min-width: 560px; }
+th, td { text-align: right; padding: 8px 10px; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+th:first-child, td:first-child { text-align: left; }
+th { font-weight: 600; color: var(--ink-2); font-size: 13px; }
+td.close { color: var(--ok); } td.off { color: var(--bad); }
+ol.steps { margin: 0; padding-left: 22px; display: flex; flex-direction: column; gap: 10px; max-width: 76ch; color: var(--ink-2); }
+ol.steps b { color: var(--ink); }
+pre { margin: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; overflow-x: auto; font: 13px/1.5 var(--f-mono); color: var(--ink); }
+.two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
+@media (max-width: 760px) { .two { grid-template-columns: 1fr; } }
+ul.notes { margin: 0; padding-left: 20px; color: var(--ink-2); display: flex; flex-direction: column; gap: 6px; max-width: 76ch; }
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+</style>
+
+<div class="wrap">
+<header>
+  <div class="eyebrow">LIBERO · Panda · OSC_POSE · 20 Hz · composed version</div>
+  <h1>LIBERO Composed Play</h1>
+  <p>Random LIBERO scenes with randomly spawned objects, and a robot that plays with them. In this version every motion is composed: exact keyframes come from the scene geometry (grasp across the narrow side of a box, on the rim of a bowl or mug, hooked behind a drawer handle), and the motion between them is a spline whose timing, hover heights, lift and carry arcs are sampled from statistics of the human LIBERO demos. Actions are generated the way a teleoperator commands the arm: the planned velocity a little ahead, with slow corrections.</p>
+</header>
+
+<div class="facts" id="facts"></div>
+
+<section>
+  <div class="eyebrow">Browse episodes</div>
+  <h2>Play episodes</h2>
+  <div class="chips" id="epchips" role="group" aria-label="Episode"></div>
+  <p class="s" style="margin:10px 0 4px;color:var(--ink-3);font-size:13px"><b style="color:var(--ink-2)">High-error episodes</b> (collected with both knobs at maximum, <code>--p_err 1.0 --err_severity 1.0</code>: 45 of 47 actions carry an error, 36 of them combinations of two to four mistakes, and 29 fail: things tipped and dropped, knocked into others mid-carry, set down half on a neighbour, failed regrasps. A shaky hand is part of only 9 of them. Not included in the statistics below)</p>
+  <div class="chips" id="epchips-hi" role="group" aria-label="High-error episode"></div>
+  <div class="panel">
+    <div class="viewer">
+      <div style="display:flex;flex-direction:column;gap:8px;min-width:0">
+        <video id="vid" controls muted playsinline preload="metadata"></video>
+        <div class="camlabels"><span>agentview</span><span>wrist camera</span></div>
+        <div class="timeline" id="tl" title="Click to seek"><div class="cursor" id="cur"></div></div>
+        <div class="legend" id="phlegend"></div>
+        <div class="meta" id="epmeta"></div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:8px;min-width:0">
+        <h3>What the robot did</h3>
+        <div class="seglist" id="segs"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="eyebrow">Reference</div>
+  <h2>Human LIBERO demonstrations</h2>
+  <p>Three of the 6,500 human demos whose statistics shape the composed motion (agentview only, real time). Compare pacing, the swoop into a grasp, and the drawer hook with the play episodes above.</p>
+  <div class="humans" id="humans"></div>
+</section>
+
+<section>
+  <div class="eyebrow">Evidence</div>
+  <h2>How human does it look?</h2>
+  <p>A small 1D-CNN was trained to tell human demo motion from motion made by an analytic scripted controller, using 1.6&nbsp;s windows of actions, end-effector velocity and gripper state (no positions, so scene layout can't give it away). The chart shows the share of windows it flags as robotic (mean of 2 seeds). Human motion replayed through the simulator sets the practical floor. This detector doesn't see grasp geometry, hand tilt or arm posture, which is where this round's fixes are, so its score barely moved (38% → 46%, within seed-to-seed spread).</p>
+  <div class="panel"><div class="chart" id="detchart"></div></div>
+  <div class="two">
+    <div class="panel">
+      <h3>End-effector speed distribution</h3>
+      <div class="legend" id="spdlegend"></div>
+      <div class="chart" id="spdchart"></div>
+    </div>
+    <div class="panel">
+      <h3>Motion statistics</h3>
+      <div class="tablewrap"><table id="stattable"></table></div>
+      <p style="font-size:13px">Green: within 25% of human. Red: more than 50% away. Translation jerk is now at human level; rotation commands are still about 1.8× human at the 90th percentile and the hand moves a little slower than people do. See open issues.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="eyebrow">Method</div>
+  <h2>How the play is generated</h2>
+  <ol class="steps">
+    <li><b>Random scene.</b> Kitchen, living-room or study table, an optional cabinet, microwave or stove at a LIBERO pose, and 3–6 objects from 25 types spawned over a wide area with random yaw.</li>
+    <li><b>Grasps from collision geometry.</b> Candidates come from the object's collision geoms at their current pose: across the whole body where it fits (up to 7.2 cm, so soup and sauce cans work), across a cap or neck for bottles, and across individual wall slats for hollow objects (rims of mugs and bowls, container walls). Like the human demos, grasps come from nearly straight above: tilt away from the object's own up axis is penalised quadratically, then a few degrees of random human-like tilt are added (grasp tilt quartiles 4 / 7 / 11°, human 4 / 8 / 14°). Grasp depth is limited by where the palm actually is (3.1 cm above the pads) and rims use the shallowest depth that clears. Each candidate is checked with exact distance queries and with inverse kinematics on a scratch copy of the robot. If the hand isn't within 1.5 cm when it's time to close, it backs off and tries another grasp instead of closing on air.</li>
+    <li><b>Closing like a person.</b> About 60% of grasps close on the fly: the fingers start closing 0.5–1.5 cm before the hand arrives, while it is still moving in, then linger a varied moment before lifting (human median approach speed at the close is 7 cm/s; here 4–5 cm/s, previously 3). Lower drawers are pinched first and then pulled, instead of closing and pulling at once.</li>
+    <li><b>Arm posture.</b> Wrist joints are kept in the range people use (from the human demos, padded); a move that would push a joint into its limit stops early; if the arm still ends up awkward (for example on the flipped-wrist branch the controller can't leave by itself), it simulates a few re-orienting moves from a snapshot, executes the one that frees the joints, then returns toward the start pose. Gripper yaw is chosen between its two equivalents so the last joint keeps room.</li>
+    <li><b>No jumps at splices.</b> Movements are generated separately, so the commanded action is rate-limited to human levels (per-step change at most 0.16 translation, 0.05 rotation, about the 99th percentile of the human demos) and the controller state carries across movements.</li>
+    <li><b>Timing and shape from humans.</b> From the human demos: the hand is ~10 cm above the object 1 s before closing and ~4 cm above at 0.5 s; reach time ≈ 1.7 s + 4 s/m; carries lift ~6 cm in 0.9 s and arc ~10 cm; release ~1–2 cm above the surface; gripper ~7° off vertical. Each motion samples these and connects the keyframes with a clamped cubic spline.</li>
+    <li><b>Teleop-style actions.</b> A dynamics model fitted to the human data showed the arm responds as a smooth ~2-step lag, so actions are the planned velocity two steps ahead plus a slow correction, with human wrist wander and small human path irregularities added.</li>
+    <li><b>Collision-aware planning.</b> Every planned reach, carry and retreat is checked against the exact simulator geometry: the gripper's collision shapes (plus the forearm, approximately, and the held object while carrying) are placed along the path and their distance to every other object, fixture and the table is measured. Candidates are tried in order of naturalness (the human-styled path, higher hovers and arcs, a route over the top, other grasp points on the object, other place spots) and the first with at least 2.5 cm of clearance is used. If nothing is clear the robot plays with something else or sets the object back down where it was. Drawers also check that the drawer itself won't sweep into anything when it slides out.</li>
+    <li><b>Playful task choice.</b> Every object is a toy, including baskets, drainers, trays and plates (grasped by a wall or rim, found from the container's actual wall geometry). Object play: move things across the table, put things in containers and on plates or bowls, take them back out, stack boxes and things on books, pick something up and turn it around before setting it down (reorient), push things, and grab the same object different ways (a near-equally good grasp is picked at random half the time). Fixture play: turn the stove on and off (grip the knob's fin from above and twist, as people do), put the moka pot and other things on the burner, open the microwave by its handle along the door's arc and push it shut with an open hand, put things on top of the microwave and the cabinet, open and close drawers and put things in an open drawer. When a scene has fixtures about a third of the choices are about them; kinds of play not done yet in the episode are preferred, the same task isn't repeated back to back, and tasks that keep failing are tried less. Contact play: knock another object with the one being carried, push one thing into another, sweep the microwave door into something standing in its way. Arrangements: line things up in a row, build a little tower. Tool use: push one object with another. Pushes vary in height, finger opening and hand orientation. About 30% of picks and put-downs are careless (may clip a neighbour), and some put-downs are snug against another object.</li>
+    <li><b>When something is in the way.</b> First try other grasps and paths with clearance; then accept a path that barely grazes the obstacle; if that grasp fails, or nothing works, move the obstacle out of the way first and try again; if the object still can't be picked, push it instead. Containers carry whatever is inside them.</li>
+    <li><b>Natural failures.</b> If an object doesn't come up when lifting, the robot lets go and either tries again or moves on to something else; some reaches are deliberately a bit off (fumbles), and some reaches stop short. On top of that, about 30% of the actions that can carry one get an injected near-failure (see below), labelled in each segment's <code>error</code> field.</li>
+  </ol>
+</section>
+
+<section hidden>
+  <div class="eyebrow">Output</div>
+  <h2>Data format and how to run it</h2>
+  <div class="two">
+    <pre id="fmt">data/demo_0/
+  actions          (T, 7)  OSC_POSE deltas, gripper ±1
+  states           (T, S)  MuJoCo sim states
+  obs/agentview_rgb    (T,128,128,3) uint8
+  obs/eye_in_hand_rgb  (T,128,128,3) uint8
+  obs/ee_pos, ee_ori, ee_states,
+      gripper_states, joint_states, object_states
+  primitive_id, segment_id, phase_id  (T,)
+  attrs: bddl, model_file, scene,
+         segments (language, success, source clip,
+                   error: injected near-failure or null,
+                   truncated / abandoned flags)</pre>
+    <pre>cd /data/user_data/mbronars/AgenticExploration/play
+MUJOCO_GL=egl \
+/data/user_data/mbronars/.miniconda3/envs/mcts/bin/python \
+  collect.py --mode composed --out OUT_DIR \
+  --episodes 200 --workers 8 --videos 10
+
+# one HDF5 per episode, ~40 MB each at 128 px
+# ~2.5 s of sim per 1 s of wall time per worker</pre>
+  </div>
+</section>
+
+<section>
+  <div class="eyebrow">This round</div>
+  <h2>What changed in this version</h2>
+  <ul class="notes">
+    <li><b>Commanded actions match the released demos.</b> The commanded actions were checked against all 1,007,618 steps of the 130-task LIBERO human data, so a model trained on this data sees the same action space as one trained on the demos. Before this round 9% of steps had some action dimension outside the human 0.1–99.9% range and 0.8% of step-to-step changes were larger than any but the rarest human ones (10% in the high-error runs, from the injected noise). The cause was mostly the hand turning faster than people turn it: rotation commands had a 90th percentile of 0.34 against the human 0.18. Every planned move now takes long enough to turn the hand at human speed, grasps that need less turning are preferred, and the injected noise goes through the same rate limit as everything else. Now 2.2% of steps fall outside the human range (high-error runs 3.0%; the human data itself 0.7%), rotation 90th / 99th percentiles are 0.26 / 0.36 (human 0.18 / 0.38), 0.05% of steps touch the action limit, and no step-to-step change exceeds the human 99.9th percentile. Translation commands are a bit smaller than the humans' (median 0.36 vs 0.59) and reaches take about 1.3× as long as a human's for the same distance, so the data is, if anything, on the gentle side of the demos.</li>
+    <li><b>Failed grasps are real attempts.</b> Some failed picks used to stop short and back off without ever closing (sometimes several times in a row), close and open again without lifting, or close in mid-air. Now the hand closes and lifts unless it is really blocked: if it ends up within 3.5 cm of the grasp point it closes anyway and the lift decides; after an early close it still lifts a few centimetres with the fingers shut before letting go; a hurried "lift too early" closes and pulls up at the same moment. A bug also made some good grasps count as failed: the lift check ran at a fixed time, and a carry that also turns the object rises more slowly; it now checks once the hand should be 3 cm up. In the new runs every failed grasp in the high-error episodes is a close-and-lift, and all but one in the clean ones.</li>
+    <li><b>Every step belongs to an action.</b> The action under way when the 60 s run out is now kept as a segment marked <code>truncated</code> ("cut off"), and an action that moved and then gave up (blocked partway) is kept as a failed segment marked <code>abandoned</code>. Time outside any labelled action is down from 11–16% to under 1%.</li>
+    <li><b>Less free-space motion.</b> Reach-and-change-your-mind is now once per episode at most, with a short pause instead of drawing the hand back; posture recoveries have been cut down (below); and objects that have drifted out of comfortable reach (nearest edge beyond 62 cm), too close to the base (under 44 cm), or off the table are no longer targets, nor are spots there used for put-downs or pushes. Longest posture recovery in all 27 new episodes: 3.6 s (previously up to 21 s in test runs), and no episode ends early.</li>
+    <li><b>Bugs behind odd motions.</b> The planner re-picked between the gripper's two equivalent orientations by whichever was nearer, ignoring that moving across the table also winds the last wrist joint; pushes and approaches then ran it into its stop, followed by a long recovery. It now checks the joint at the end of each move with inverse kinematics. After a side or handle grasp, the hand now backs out the way it came and turns upright while rising, instead of going straight up with the wrist wound up. Drawer handles have to be reachable with the elbow clearly bent; pushes start at least 47 cm from the base (closer, the arm folded up against its stop); a move whose hand falls more than 4 cm behind and stops moving is ended instead of pushing harder; the arm resets its posture whenever it is not holding anything (it skipped this whenever the fist was closed after a push); the microwave door's swing is checked for both hand orientations; and a reorient with an already twisted grasp is no longer tried. Episodes are now exactly reproducible from <code>--seed</code> / <code>--start</code>.</li>
+    <li><b>Different ways to hold things.</b> Half of all picks now try an unusual grasp first: a mug by its handle (pinching the handle's bar from above, at an angle, or from the outside), or a can, bottle, carton or mug from the side, with the hand tilted 45–65° and coming in across the object, fingers closing either left-to-right or front-to-back. These grasps get more of the wrist's range than the human-range limit used elsewhere, for that action only. Where clutter or the wrist's reach rules them out, the robot falls back to a normal grasp, so in the 19 showcase episodes 2 picks were by the handle and 7 from the side (9 of 68). They are not used within about 48 cm of the robot's base or for turning things round in the hand, where the wrist would flip. The action list marks them "by the handle" / "from the side": see living-room episode 0 and kitchen episode 2 for handles, living-room episodes 0 and 7 and study episodes 13 and 14 for side grasps.</li>
+    <li><b>Less shaking in the extreme runs.</b> Noise errors could be added to anything, so they were showing up in most actions at maximum severity. Now about 15% of severe combinations include a shaky hand, noise-only errors on knobs, doors and reaches come at about a third of the rate, and plain shaky/jitter errors are rarer relative to the other types. The noise itself is now smooth in time (a hand wobbling rather than white noise) and passes through the same per-step rate limit as all other actions, so even injected errors never jump from one step to the next more than a person's commands do.</li>
+    <li><b>Microwave lunge.</b> Pushing the microwave door shut could pin the hand against the door while the command kept growing, until the hand slipped over the door and the arm shot out straight (an 8 s recovery). The push now stops when the hand falls more than 3.5 cm behind its path.</li>
+    <li><b>Near-failures.</b> A fraction of actions (p = 0.3 per action, set with <code>--p_err</code>) now carry one injected mistake of the kind a teleoperator makes, executed with the normal motion so it doesn't look staged. Grasps: a grasp point 1.5–3 cm off centre along the closing direction, or 1.5–2.5 cm too high; deliberately taking one of the less stable grasp candidates; closing too early (fingers shut 3–6 cm before arriving) or too late (overshooting 1–2 cm, then closing); lifting before the fingers have closed. Put-downs: 3.5–6 cm off the intended spot (so things land on a bin's rim or half off a burner), dropping from 5–9 cm, or letting go part-way through the carry. Pushes start 1.5–3 cm to the side; drawer handles are hooked 1–2 cm off. Any action can instead get a shaky hand (smooth noise, σ 0.05–0.1, for the whole action; a centimetre or two of wobble) or a short jerky burst (σ 0.15–0.25 for 0.4–1 s; a 4–8 cm swerve). A failed grasp is a real attempt: the hand goes down to the object, closes, lifts a few centimetres, and if nothing came up, opens and either tries again or goes on to something else; there is no searching around afterwards. Each failure is recorded in the segment's <code>error</code> field (type and magnitude) alongside <code>success</code>. A second knob, <code>--err_severity</code> (default 0.15), sets the fraction of injected errors drawn from much larger ranges, marked <code>"severe": true</code>: grasps 3.5–5.5 cm off centre or 3–5 cm high (usually a miss), closing 7–12 cm early, overshooting 2.5–4 cm (shoving the object over), pulling up before the fingers close, set down 7–13 cm off (off a cabinet top, outside a bin), dropped from 12–20 cm, let go a quarter to half way through the carry, a stronger shake or jerk, pushes 3.5–6 cm off, drawer hooks 2.5–4 cm off, and a new one, setting the object down half on top of a neighbour so one of them topples (<code>knock_over</code>, with the hit object in <code>hit</code>). Severe errors on picks are combinations, one mistake per stage: a bad or unstable grasp; then swinging the held object hard into a neighbour on the way (<code>carry_hit</code>, the hit object in <code>hit_carry</code>) and/or a shaky hand; then a bad finish (let go mid-carry, set down half on a neighbour, dropped from high). The parts are in the error's <code>parts</code> list and its <code>type</code> joins them with "+", e.g. <code>unstable_grasp+carry_hit+shaky+knock_over</code>. On the open table, "set down off target" just looks like another spot, so in severe mode it becomes setting it down on a neighbour. After a failed grasp, a high-severity run may fumble the retry too (<code>retry_errors</code>). Severe errors also let the hand and the held object plow through loose objects on the way. With severe errors the safety checks that would normally back off before a bad close are skipped, so the grasp really is attempted, lifted and found empty. In the 19 showcase episodes (default settings), 31 of 120 actions carry an injected error and 15 of those end as failures; a near-failure that still works out is common, e.g. an off-centre grasp that holds.</li>
+    <li><b>More inventive play.</b> New: lining two or three things up in a row next to another one; stacking things into a little tower; holding one object and using it to shove another a good distance; and pushes that vary where and how the hand meets the object: low, in the middle or up high (high on a tall thing can tip it over), fingers closed or open, with the flat of the hand or its narrow side. In this round's 21 recorded episodes: 6 rows (4 complete), 9 pushes with an object (5 shoving it over 3 cm), pushes at all three heights, 21 different kinds of action.</li>
+    <li><b>Natural bumps.</b> About 30% of picks and put-downs are now "careless": they take the most natural grasp or path even if the hand or the object clips a neighbouring object (up to about 1.5 cm of overlap with loose objects; fixtures and the table stay strict), and about one in five put-downs is right up against another object. Across the same 21 episodes, 21 careless picks or placements, 8 of which touched something on the way. The dedicated "knock it with the carried object" action is rarer now.</li>
+    <li><b>Following through, and less of the same.</b> Actions used to be picked independently, so a drawer could be opened, filled and left open, and the first half of an episode could be several near-identical shuffles. Now what naturally comes next is strongly preferred (open a drawer, put something in, close it again; switch the stove on, put the pot on, later switch it off; shut a microwave that was opened), anything that looks like what was just done (moving, turning, pushing things about) gets less likely across the whole family, and scenes with fixtures start with them. Reach-and-change-your-mind happens at most twice an episode.</li>
+    <li><b>No more wild retreats.</b> Getting out of an awkward arm posture used to chain several moves (look-ahead tilts and twists, wrist unwinding, repeated retries) that could swing the hand around for over ten seconds, as in living-room episode 10. Now: a single 1-2 s move that lifts the hand and draws it out of a folded posture or in from a stretched one; at full stretch the elbow is first bent again with short moves that are tried in simulation; only a wrist still on its flipped branch gets a look-ahead. Most awkward postures are now avoided in the first place: a joint guard stops any move that drives a wrist joint out of the range people use or straightens the elbow (each joint watched on its own), nothing is placed, pushed or knocked within 40 cm of the robot's base, and destinations stay within comfortable reach. A path that starts against something the hand just touched is no longer refused (that had stalled one episode for 30 s). Longest retreat in the 16 main showcase episodes: 3.8 s (was 13 s).</li>
+    <li><b>Things hitting things.</b> Part of the play is now finding out what happens on contact: knocking another object with the one being carried, on its way to where it's going (skimming along the table, or coming in side-on); pushing one object into another so it shoves it along; and standing something in the microwave door's swing, then opening or shutting the door into it. Everything up to the contact is collision-planned as before; the approach side is the most natural free one, and the point of contact is found from the two objects' real collision shapes, so the hit lands. In the 19 showcase episodes: 9 knocks while carrying, 7 push-intos, 1 door sweep (the hit object moves 1–10 cm, median 5 cm). These are logged as the action's intended <code>interact</code> object, not as accidental bumps.</li>
+    <li><b>Playing with the scene, not just moving things.</b> New: stove knob on/off, things onto the burner (stove scenes now come with a moka pot), microwave door open/close, things on top of the microwave and the cabinet, things into an open drawer, stacking, reorienting, and varied grasps. The "look at it" turn in the air is gone. In the 19 showcase episodes: 17 reorients, 11 placements on fixtures, 4 into drawers, 2 stove switch-ons, 2 pots onto the burner, the microwave opened and closed. Tall things are no longer put on bowls or small boxes, where they toppled.</li>
+    <li><b>No more standing around.</b> Kitchen episode 2 used to put the mug on the drainer's divider, tip it, and then wander for 30 s with nothing graspable. Three causes: the put-in spot was the container's bounding-box centre (now a spot on the container's actual floor, found from its collision geoms, or deliberately on top if the thing doesn't fit, as with that mug); a failed plan triggered a posture-recovery move every few failures (now only when a joint is really near its limit, and shorter); and the fallback options were broken: pushing a container counted its own contents as obstacles, grabbing the drainer was refused over a 1.5 cm brush with the loose mug (brushing a loose object is now allowed; fixtures and the table stay strict), reaching toward containers failed silently, and objects lying on their side were off the menu. Containers can now be pushed and moved with whatever is in them, and lying objects can be pushed or grasped across their body. Pushes also pick the clearest of all free directions, try several approach heights, and keep the object within reach.</li>
+    <li><b>No pause between actions.</b> When an action ended with a joint near its limit, the next plan failed and only then did the arm move back to a comfortable posture, which looked like 3–4 s of hesitation. The posture reset now happens as part of the finishing action's retreat, and unwinding the wrist travels toward the home pose instead of twisting in place. Pauses between actions: 4 longer than 2 s in 16 episodes (the previous version had 5 longer than 3 s), and an episode that used to stall at 14 s now plays all 60 s.</li>
+    <li><b>Things half out of a bin.</b> If an object rests on a container's rim or divider and sticks out of it, its grasp may now brush the container by up to 1.5 cm; the mug that tipped onto the drainer is taken back out 5 of 6 times. Things fully inside a narrow slot are left there, and the robot plays with other objects or pushes the bin around.</li>
+    <li><b>Reachable spawns.</b> Objects could spawn up to 76 cm from the base, beyond a top-down reach, and then just sat there; spawns are now within 62 cm (the range stays wide in y).</li>
+    <li><b>Wrong gripper yaw.</b> Out-of-range wrist yaws were clipped instead of using the equivalent 180° away, so some drawer hooks and pushes came in rotated ~70°. Fixed: drawer opens went from 6/12 to 13/16 over the last two 16-episode runs.</li>
+    <li><b>Wrong table height.</b> LIBERO's workspace offset is 2.7 cm below the real table in the living room and 1.8 cm in the study. It is now measured by ray-casting the table, which fixed pushes (0/2 before, 14/15 over the last two runs) and place heights in those scenes.</li>
+    <li><b>Unreliable distance queries.</b> MuJoCo 3.3's native collider returns spurious zero distances for many mesh–box pairs, and the legacy one returns bogus deep penetrations for some thin boxes. Distances are now cross-checked between the two. This is what had hidden the over-deep grasps and blocked some lifts.</li>
+    <li><b>Tilted grasps.</b> Bottles and cartons only had 20–40° tilted grasps; cans had none. All grasp types now come from above (top-candidate tilt 90th percentile under 10° before the added jitter), and a pick-and-lift test of every object type succeeds 63/63 in the kitchen.</li>
+    <li><b>Joint limits.</b> Steps within 0.1 rad of a joint limit fell from 31% to 2.2% (human demos: 1.3%), mostly the elbow when reaching close to the base, and no episode stays stuck in an awkward posture.</li>
+    <li><b>Physics glitches.</b> LIBERO sometimes spawns a bottle 3 cm inside the living-room table, where it can't be lifted; it is now lifted out at the start. Objects are lowered into trays and baskets instead of being dropped from the rim, which once launched a cookie box across the room.</li>
+  </ul>
+</section>
+<section>
+  <div class="eyebrow">Open issues</div>
+  <h2>What still differs from the demos</h2>
+  <ul class="notes" id="notes"></ul>
+</section>
+</div>
+<div class="tip" id="tip" hidden></div>
+
+<script>
+const DATA = __DATA__;
+const $ = (s) => document.querySelector(s);
+const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const tip = $("#tip");
+function showTip(e, html) { tip.innerHTML = html; tip.hidden = false; const x = Math.min(e.clientX + 12, innerWidth - 270); tip.style.left = x + "px"; tip.style.top = (e.clientY + 12) + "px"; }
+function hideTip() { tip.hidden = true; }
+
+const PRIM = { move: "move", put_in: "put in", put_on: "put on", take_out: "take out", inspect: "look at it", push: "push", clear_then_move: "clear the way, then move", clear_then_put_in: "clear the way, then put in", clear_then_put_on: "clear the way, then put on", clear_then_inspect: "clear the way, then look", clear_then_take_out: "clear the way, then take out", pick_place: "pick & place", pick_place_on: "put on object", pick_place_drawer: "put in drawer", pick_fumble: "fumble", reach_toward: "reach toward",
+  drawer_open: "open drawer", drawer_close: "close drawer", microwave_open: "open microwave", microwave_close: "close microwave", stove_open: "stove knob", stove_close: "stove knob", stove_on: "turn stove on", stove_off: "turn stove off", stack: "stack", reorient: "reorient", put_on_fixture: "put on fixture", put_on_stove: "put on stove", put_in_drawer: "put in drawer", line_up: "line up", tower: "build a tower", push_with: "push with an object", bump_with: "knock with carried object", push_into: "push into another", door_sweep: "door into object" };
+const PH = { approach: "--p-approach", transport: "--p-transport", transit: "--p-transit", articulate: "--p-articulate", regrasp: "--p-regrasp", correct: "--p-correct", gripper_only: "--p-gripper", fumble: "--p-regrasp", inspect: "--p-transit", push: "--p-articulate", grasp: "--p-grasp", release: "--p-release", retreat: "--p-retreat", other: "--p-other" };
+const PHN = { approach: "reach", grasp: "close gripper", transport: "carry & place", release: "release", retreat: "retreat", articulate: "drawer pull / push", correct: "corrective adjust", regrasp: "regrasp", inspect: "look at it", push: "push" };
+
+// facts
+const g = DATA.grasp, prims = DATA.prim;
+const facts = [
+  [Math.round(100 * g.grasped / g.n) + "%", `of pick attempts lift the object (${g.grasped}/${g.n}), ${g.first} on the first try`],
+  [`${DATA.n_dist}/${DATA.n_seg}`, "actions that disturbed an object other than the one being handled (22% before collision-aware planning)"],
+  [`${Object.values(prims).reduce((a, v) => a + v[0], 0)}/${DATA.n_seg}`, "play actions that achieved what they set out to do (moves, put in / take out, pushes, drawers, looking at things)"],
+  [DATA.n_show + " / " + DATA.steps_show.toLocaleString(), `showcase episodes / steps (about ${Math.round(DATA.steps_show / 20 / 60)} min of play)`],
+];
+$("#facts").innerHTML = facts.map(([b, s]) => `<div class="fact"><b>${b}</b><span>${s}</span></div>`).join("");
+
+// legend for phases
+$("#phlegend").innerHTML = Object.entries(PHN).map(([k, n]) => `<span><i style="background:var(${PH[k]})"></i>${n}</span>`).join("");
+
+let cur = null;
+function fmtT(steps) { const s = steps / 20; return Math.floor(s / 60) + ":" + String(Math.floor(s % 60)).padStart(2, "0"); }
+function loadEp(i) {
+  const ep = DATA.episodes[i]; cur = ep;
+  document.querySelectorAll("#epchips .chip, #epchips-hi .chip").forEach((c) => c.setAttribute("aria-pressed", +c.dataset.i === i ? "true" : "false"));
+  const v = $("#vid"); v.src = ep.file || `media/play_${ep.ep}.mp4`; v.load();
+  const names = ep.objects.map((o) => o.replace(/_\d+$/, "").replace(/_/g, " "));
+  $("#epmeta").innerHTML = `<b>${ep.scene.replace("_", " ")}</b> table${ep.fixture ? " with a " + ep.fixture.replace(/_/g, " ") : ""} · ${names.join(", ")} · ${(ep.T / 20).toFixed(0)} s`;
+  // phase timeline (phase sampled every 2 steps)
+  const tl = $("#tl"); tl.querySelectorAll(".ph").forEach((n) => n.remove());
+  const n = ep.phase.length; let s0 = 0;
+  for (let k = 1; k <= n; k++) {
+    if (k === n || ep.phase[k] !== ep.phase[s0]) {
+      const d = document.createElement("div"); d.className = "ph";
+      d.style.left = (100 * s0 / n) + "%"; d.style.width = (100 * (k - s0) / n) + "%";
+      d.style.background = `var(${PH[ep.phase[s0]] || "--p-other"})`;
+      const ph = ep.phase[s0];
+      d.addEventListener("mousemove", (e) => showTip(e, `${PHN[ph] || ph}<br><span class="mono">${fmtT(s0 * 2)}–${fmtT(k * 2)}</span>`));
+      d.addEventListener("mouseleave", hideTip);
+      tl.insertBefore(d, $("#cur")); s0 = k;
+    }
+  }
+  $("#segs").innerHTML = ep.segments.map((s, j) => `<button class="seg" data-j="${j}">
+      <span class="t">${fmtT(s.s)}</span>
+      <span class="l">${s.lang}<span class="s">${PRIM[s.p] || s.p}${s.att > 1 ? ` · ${s.att} attempts` : ""}${s.err ? ` · <b style="color:var(--bad)">injected: ${s.err.replace(/_/g, " ")}</b>` : ""}${s.gr === "handle" ? " · <b>by the handle</b>" : s.gr === "side" ? " · <b>from the side</b>" : ""} · clip: ${(s.src || "").replace(/_/g, " ").slice(0, 70)}</span></span>
+      <span class="pill ${s.ok ? "ok" : "no"}">${s.tr ? "cut off" : s.ab ? "gave up" : s.ok ? "done" : "missed"}</span>${s.dist && s.dist.length ? `<span class="s" style="grid-column:2/4;color:var(--bad)">bumped: ${s.dist.map((x) => x.replace(/_\d+$/, "").replace(/_/g, " ")).join(", ")}</span>` : ""}</button>`).join("");
+  document.querySelectorAll(".seg").forEach((b) => b.addEventListener("click", () => { const s = ep.segments[+b.dataset.j]; v.currentTime = s.s / 20; v.play().catch(() => {}); }));
+}
+const chip = (e, i) => `<button class="chip" data-i="${i}" aria-pressed="false">${e.scene.replace("_", " ")}${e.fixture ? " + " + e.fixture.split("_").pop() : ""} · ep ${e.ep}</button>`;
+$("#epchips").innerHTML = DATA.episodes.map((e, i) => e.hi ? "" : chip(e, i)).join("");
+$("#epchips-hi").innerHTML = DATA.episodes.map((e, i) => e.hi ? chip(e, i) : "").join("");
+document.querySelectorAll("#epchips .chip, #epchips-hi .chip").forEach((c) => c.addEventListener("click", () => loadEp(+c.dataset.i)));
+const vid = $("#vid");
+vid.addEventListener("timeupdate", () => {
+  if (!cur) return; const t = vid.currentTime * 20; $("#cur").style.left = (100 * t / cur.T) + "%";
+  document.querySelectorAll(".seg").forEach((b) => { const s = cur.segments[+b.dataset.j]; b.classList.toggle("active", t >= s.s && t < s.e); });
+});
+$("#tl").addEventListener("click", (e) => { if (!cur) return; const r = e.currentTarget.getBoundingClientRect(); vid.currentTime = ((e.clientX - r.left) / r.width) * cur.T / 20; });
+loadEp(0);
+
+// human videos
+$("#humans").innerHTML = DATA.human.map((h) => `<figure><video src="${h.file}" controls muted loop playsinline preload="metadata"></video><figcaption>${h.task} · ${(h.T / 20).toFixed(1)} s</figcaption></figure>`).join("");
+
+// detector chart: horizontal bars
+const DET = [
+  ["Held-out human demos", 0.038, "human"],
+  ["Human demos replayed in sim (floor)", 0.103, "human"],
+  ["Clip-replay play (earlier version)", 0.113, "human"],
+  ["Human paths warped to keyframes", 0.337, "play"],
+  ["Composed, previous version", 0.384, "play"],
+  ["Composed, this version", 0.456, "play"],
+  ["Composed, first version", 0.51, "play"],
+  ["Scripted controller (min-jerk + noise)", 0.775, "scripted"],
+];
+(function () {
+  const W = 760, rowH = 34, top = 10, left = 290, right = 60, H = top + DET.length * rowH + 30;
+  const x = (v) => left + v * (W - left - right);
+  let s = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Share of motion windows flagged robotic">`;
+  for (const t of [0, 0.25, 0.5, 0.75, 1]) s += `<line class="grid" x1="${x(t)}" x2="${x(t)}" y1="${top}" y2="${H - 24}"/><text x="${x(t)}" y="${H - 8}" text-anchor="middle">${t * 100}%</text>`;
+  DET.forEach(([n, v, k], i) => {
+    const y = top + i * rowH + 6;
+    s += `<text x="${left - 10}" y="${y + 14}" text-anchor="end">${n}</text>`;
+    s += `<rect class="bar" data-n="${n}" data-v="${v}" x="${left}" y="${y}" width="${Math.max(2, x(v) - left)}" height="18" rx="4" fill="var(--${k})"/>`;
+    s += `<text class="val" x="${x(v) + 6}" y="${y + 14}">${(v * 100).toFixed(1)}%</text>`;
+  });
+  $("#detchart").innerHTML = s + "</svg>";
+  document.querySelectorAll("#detchart .bar").forEach((r) => {
+    r.addEventListener("mousemove", (e) => showTip(e, `${r.dataset.n}<br><span class="mono">${(r.dataset.v * 100).toFixed(1)}% of windows flagged robotic</span>`));
+    r.addEventListener("mouseleave", hideTip);
+  });
+})();
+
+// speed histogram as lines
+(function () {
+  const series = [["human", "Human demos"], ["play", "Play (final)"], ["scripted", "Scripted controller"]];
+  $("#spdlegend").innerHTML = series.map(([k, n]) => `<span><i style="background:var(--${k})"></i>${n}</span>`).join("");
+  const b = DATA.hist.bins, W = 520, H = 260, l = 44, r = 14, t = 12, bo = 34;
+  const mids = b.slice(0, -1).map((v, i) => (v + b[i + 1]) / 2);
+  const ymax = Math.max(...series.flatMap(([k]) => DATA.hist[k]));
+  const x = (v) => l + (v / 0.4) * (W - l - r), y = (v) => t + (1 - v / ymax) * (H - t - bo);
+  let s = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Speed distribution">`;
+  for (const v of [0, 0.1, 0.2, 0.3, 0.4]) s += `<line class="grid" x1="${x(v)}" x2="${x(v)}" y1="${t}" y2="${H - bo}"/><text x="${x(v)}" y="${H - bo + 16}" text-anchor="middle">${v.toFixed(1)}</text>`;
+  s += `<text x="${(l + W - r) / 2}" y="${H - 4}" text-anchor="middle">end-effector speed (m/s)</text>`;
+  const yt = Math.floor(ymax * 10) / 10;
+  for (const v of [0, yt / 2, yt]) s += `<line class="grid" x1="${l}" x2="${W - r}" y1="${y(v)}" y2="${y(v)}"/><text x="${l - 6}" y="${y(v) + 4}" text-anchor="end">${Math.round(v * 100)}%</text>`;
+  for (const [k] of series) s += `<polyline fill="none" stroke="var(--${k})" stroke-width="2" points="${mids.map((m, i) => x(m) + "," + y(DATA.hist[k][i])).join(" ")}"/>`;
+  s += `<line id="xh" class="grid" y1="${t}" y2="${H - bo}" x1="-10" x2="-10" stroke-dasharray="3 3"/>`;
+  s += `<rect id="hit" x="${l}" y="${t}" width="${W - l - r}" height="${H - t - bo}" fill="transparent"/>`;
+  $("#spdchart").innerHTML = s + "</svg>";
+  const svg = $("#spdchart svg"), hit = $("#hit"), xh = $("#xh");
+  hit.addEventListener("mousemove", (e) => {
+    const pt = svg.createSVGPoint(); pt.x = e.clientX; pt.y = e.clientY; const p = pt.matrixTransform(svg.getScreenCTM().inverse());
+    const i = Math.max(0, Math.min(mids.length - 1, Math.round(((p.x - l) / (W - l - r)) * 0.4 / 0.02 - 0.5)));
+    xh.setAttribute("x1", x(mids[i])); xh.setAttribute("x2", x(mids[i]));
+    showTip(e, `<span class="mono">${b[i].toFixed(2)}–${b[i + 1].toFixed(2)} m/s</span><br>` + series.map(([k, n]) => `${n}: ${(DATA.hist[k][i] * 100).toFixed(1)}%`).join("<br>"));
+  });
+  hit.addEventListener("mouseleave", () => { hideTip(); xh.setAttribute("x1", -10); xh.setAttribute("x2", -10); });
+})();
+
+// stats table
+(function () {
+  const S = DATA.stats, rows = [
+    ["Speed, median (m/s)", "speed_p50", 3], ["Speed, 90th pct (m/s)", "speed_p90", 3],
+    ["Translation action, median", "act_p50", 2], ["Translation action, 90th pct", "act_p90", 2],
+    ["Rotation action, 90th pct", "rot_p90", 2], ["Translation jerk |Δa|", "jerk", 3], ["Rotation jerk |Δa|", "jerk_rot", 4],
+    ["Saturated action steps", "sat", "%"], ["Time moving < 3 cm/s", "slow", "%"]];
+  const f = (v, d) => d === "%" ? (v * 100).toFixed(1) + "%" : v.toFixed(d);
+  const cls = (v, h) => { if (h === 0) return v === 0 ? "close" : "off"; const r = Math.abs(v - h) / Math.abs(h); return r <= 0.25 ? "close" : r > 0.5 ? "off" : ""; };
+  $("#stattable").innerHTML = `<tr><th>Measure</th><th>Human</th><th>Play</th><th>Scripted</th></tr>` +
+    rows.map(([n, k, d]) => `<tr><td>${n}</td><td>${f(S.human[k], d)}</td><td class="${cls(S.play[k], S.human[k])}">${f(S.play[k], d)}</td><td class="${cls(S.scripted[k], S.human[k])}">${f(S.scripted[k], d)}</td></tr>`).join("");
+})();
+
+$("#notes").innerHTML = [
+  `Short motion windows are still distinguishable from human: the detector above flags about 46% of them (human 4%, replayed human 10%), and a fresh classifier separates them at about 80% balanced accuracy. Rotation commands (about 1.8× human at the 90th percentile) and slightly slow hand speed are the clearest remaining differences.`,
+  `Pushes ${prims.push ? prims.push[0] + "/" + prims.push[1] : "–"}, drawer opens ${prims.drawer_open ? prims.drawer_open[0] + "/" + prims.drawer_open[1] : "–"} here; middle and bottom drawers are still the least reliable.`,
+  `The wrist still occasionally swings onto an awkward branch during a big re-orientation; it is now caught and recovered within 1–2 s rather than jamming the episode.`,
+  `Towers rarely come up: they need two things that can stand on each other plus a flat base in the same scene. Snug put-downs usually end just touching rather than visibly shoving the neighbour.`,
+  `About a third of episodes still have no deliberate contact (it depends on things being close enough together); knocks while carrying fail about a third of the time when every side of the target is crowded.`,
+  `Retreats of 2-5 s after an awkward action still happen a few times per 20 episodes; one stove episode has a 5 s one.`,
+  `Nothing is put inside the microwave yet: its interior is too low for a hand coming from above, so it needs a sideways approach.`,
+  `The far-side microwave placement and the stove placements closest to the robot are left out: there the door can't be shut again, or the knob can't be reached.`,
+  `The frying pan isn't used yet (it needs a handle grasp).`,
+  `About once per four episodes a failed grasp is still followed by a 3–5 s return toward the home posture.`,
+  `A flat box that lands deep in one of the drainer's slots stays there: the slot is narrower than the hand.`,
+  `In the living room some placements at the far edge have no reachable grasp, so those objects get played with less.`,
+].map((t) => `<li>${t}</li>`).join("");
+</script>

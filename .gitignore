@@ -1,0 +1,8 @@
+# Only the code is versioned; collected data, reference data and pages are
+# regenerated (see play/README.md).
+/*
+!/.gitignore
+!/README.md
+!/play/
+__pycache__/
+*.pyc

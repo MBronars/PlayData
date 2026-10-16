@@ -1,0 +1,364 @@
+diff --git a/libero/libero/benchmark/__init__.py b/libero/libero/benchmark/__init__.py
+index 2b833d0..5734edb 100644
+--- a/libero/libero/benchmark/__init__.py
++++ b/libero/libero/benchmark/__init__.py
+@@ -161,7 +161,7 @@ class Benchmark(abc.ABC):
+             self.tasks[i].problem_folder,
+             self.tasks[i].init_states_file,
+         )
+-        init_states = torch.load(init_states_path)
++        init_states = torch.load(init_states_path, weights_only=False)
+         return init_states
+ 
+     def set_task_embs(self, task_embs):
+diff --git a/libero/libero/envs/bddl_base_domain.py b/libero/libero/envs/bddl_base_domain.py
+index 0aa0f0c..b892d87 100644
+--- a/libero/libero/envs/bddl_base_domain.py
++++ b/libero/libero/envs/bddl_base_domain.py
+@@ -132,6 +132,7 @@ class BDDLBaseDomain(SingleArmEnv):
+         self._arena_xml = os.path.join(self.custom_asset_dir, scene_xml)
+         self._arena_properties = scene_properties
+ 
++        print(f"Loading scene from {self._arena_xml}")
+         super().__init__(
+             robots=robots,
+             env_configuration=env_configuration,
+@@ -283,14 +284,21 @@ class BDDLBaseDomain(SingleArmEnv):
+                 0.6380177736282349,
+             ],
+         )
++        # mujoco_arena.set_camera(
++        #     camera_name="agentview",
++        #     pos=[0.5886131746834771, 0.0, 1.4903500240372423],
++        #     quat=[
++        #         0.6380177736282349,
++        #         0.3048497438430786,
++        #         0.30484986305236816,
++        #         0.6380177736282349,
++        #     ],
++        # )
+         mujoco_arena.set_camera(
+             camera_name="agentview",
+-            pos=[0.5886131746834771, 0.0, 1.4903500240372423],
++            pos=[-0.74047936,  0.83939088,  1.1465133],
+             quat=[
+-                0.6380177736282349,
+-                0.3048497438430786,
+-                0.30484986305236816,
+-                0.6380177736282349,
++                -0.31127192, -0.16779597, 0.4438537, 0.8233761
+             ],
+         )
+ 
+@@ -365,6 +373,16 @@ class BDDLBaseDomain(SingleArmEnv):
+ 
+         # Arena always gets set to zero origin
+         mujoco_arena.set_origin([0, 0, 0])
++        # breakpoint()
++        # if len(self.parsed_problem["camera"].get("ranges", [])) > 0:
++        #     self._setup_camera(
++        #         mujoco_arena,
++        #         agentview_pose=self._sample_camera_pose(
++        #             degrees=(self.parsed_problem["camera"]["unit"] == "degrees")
++        #         ),
++        #     )
++        # else:
++        #     self._setup_camera(mujoco_arena)
+ 
+         self._setup_camera(mujoco_arena)
+ 
+@@ -558,6 +576,70 @@ class BDDLBaseDomain(SingleArmEnv):
+         ]
+ 
+         return sensors, names
++    
++    def _sample_camera_pose(self, degrees=False):
++        ranges_r_theta_phi = self.parsed_problem["camera"]["ranges"]
++        range_choice = np.random.choice(range(len(ranges_r_theta_phi)))
++        range_r_theta_phi = ranges_r_theta_phi[range_choice]
++        range_r = [range_r_theta_phi[0], range_r_theta_phi[3]]
++        range_theta = [range_r_theta_phi[1], range_r_theta_phi[4]]
++        range_phi = [range_r_theta_phi[2], range_r_theta_phi[5]]
++
++        jitter_mode = self.parsed_problem["camera"]["jitter_mode"]
++
++        if jitter_mode == "uniform":
++            sample_r = (range_r[1] - range_r[0]) * np.random.random_sample() + range_r[
++                0
++            ]
++            sample_theta = (
++                range_theta[1] - range_theta[0]
++            ) * np.random.random_sample() + range_theta[0]
++            sample_phi = (
++                range_phi[1] - range_phi[0]
++            ) * np.random.random_sample() + range_phi[0]
++        elif jitter_mode == "normal":
++            sample_r = np.clip(
++                np.random.normal(
++                    (range_r[1] + range_r[0]) / 2.0, (range_r[1] - range_r[0]) / 6.0
++                ),
++                range_r[0],
++                range_r[1],
++            )
++            sample_theta = np.clip(
++                np.random.normal(
++                    (range_theta[1] + range_theta[0]) / 2.0,
++                    (range_theta[1] - range_theta[0]) / 6.0,
++                ),
++                range_theta[0],
++                range_theta[1],
++            )
++            sample_phi = np.clip(
++                np.random.normal(
++                    (range_phi[1] + range_phi[0]) / 2.0,
++                    (range_phi[1] - range_phi[0]) / 6.0,
++                ),
++                range_phi[0],
++                range_phi[1],
++            )
++        else:
++            raise NotImplementedError
++
++        # Converting spherical to pos and quat
++        r_theta_phi = (sample_r, sample_theta, sample_phi)
++        if degrees:
++            r_theta_phi = (
++                r_theta_phi[0],
++                np.deg2rad(r_theta_phi[1]),
++                np.deg2rad(r_theta_phi[2]),
++            )
++        pos, quat_wxyz = convert_spherical_to_pos_quat(r_theta_phi)
++        cam_fixation_pos = np.array(self.workspace_offset)  # table center
++
++        pos += cam_fixation_pos
++        
++        print(f"Samples pos: {pos}, quat: {quat_wxyz}")
++
++        return {"pos": pos, "quat": quat_wxyz}
+ 
+     def _add_placement_initializer(self):
+ 
+diff --git a/libero/libero/envs/bddl_utils.py b/libero/libero/envs/bddl_utils.py
+index 7902646..d6a7aae 100644
+--- a/libero/libero/envs/bddl_utils.py
++++ b/libero/libero/envs/bddl_utils.py
+@@ -82,18 +82,50 @@ def get_problem_info(problem_filename):
+         "domain_name": domain_name,
+         "language_instruction": " ".join(language_instruction),
+     }
++    
++def get_camera_poses(group):
++    camera = {}
++    camera["ranges"] = []
++    camera["jitter_mode"] = "uniform"
++    camera["unit"] = "radians"
++    for subgrp in group[1:]:
++        if subgrp[0] == ":ranges":
++            for cam_range in subgrp[1]:
++                # ranges in spherical coordinates (physics convention)
++                camera["ranges"].append([eval(val) for val in cam_range])
++        if subgrp[0] == ":jitter_mode":
++            camera["jitter_mode"] = subgrp[1]
++        if subgrp[0] == ":unit":
++            camera["unit"] = subgrp[1]
++    assert camera["jitter_mode"] in [
++        "uniform",
++        "normal",
++    ], f"Camera jitter mode {camera['jitter_mode']} not supported."
++    assert camera["unit"] in [
++        "radians",
++        "degrees",
++    ], f"Camera pose unit should be radians or degrees, {camera['unit']} not supported."
++    return camera
+ 
+ 
+ def robosuite_parse_problem(problem_filename):
++    if problem_filename.endswith(".json"):
++        parsed_problem = json.load(open(problem_filename, "r"))
++        return parsed_problem
++
+     domain_name = "robosuite"
+     problem_filename = problem_filename
+     tokens = scan_tokens(filename=problem_filename)
+     if isinstance(tokens, list) and tokens.pop(0) == "define":
+         problem_name = "unknown"
+         objects = {}
++        textures = {}
++        camera = {}
++        lighting = {}
+         obj_of_interest = []
+         initial_state = []
+         goal_state = []
++        demonstration_states = []
+         fixtures = {}
+         regions = {}
+         scene_properties = {}
+@@ -122,6 +154,20 @@ def robosuite_parse_problem(problem_filename):
+                     if not "object" in objects:
+                         objects["object"] = []
+                     objects["object"] += object_list
++            elif t == ":textures":
++                textures = get_textures(group)
++            elif t == ":camera":
++                camera = get_camera_poses(group)
++            elif t == ":lighting":
++                lighting["source"] = []
++                for subgrp in group[1:]:
++                    if subgrp[0] == ":shadow":
++                        lighting["shadow"] = True if subgrp[1] == "true" else False
++                    elif subgrp[0] == ":source":
++                        # position of light source pointing at the origin
++                        # ranges in spherical coordinates (physics convention)
++                        for src_range in subgrp[1]:
++                            lighting["source"].append([eval(val) for val in src_range])
+             elif t == ":obj_of_interest":
+                 group.pop(0)
+                 while group:
+@@ -153,6 +199,9 @@ def robosuite_parse_problem(problem_filename):
+                 initial_state = group
+             elif t == ":goal":
+                 package_predicates(group[1], goal_state, "", "goals")
++            elif t == ":demonstration":
++                group.pop(0)
++                demonstration_states = group
+             else:
+                 print("%s is not recognized in problem" % t)
+         return {
+@@ -160,9 +209,13 @@ def robosuite_parse_problem(problem_filename):
+             "fixtures": fixtures,
+             "regions": regions,
+             "objects": objects,
++            "textures": textures,
++            "camera": camera,
++            "lighting": lighting,
+             "scene_properties": scene_properties,
+             "initial_state": initial_state,
+             "goal_state": goal_state,
++            "demonstration_states": demonstration_states,
+             "language_instruction": language_instruction,
+             "obj_of_interest": obj_of_interest,
+         }
+@@ -170,3 +223,4 @@ def robosuite_parse_problem(problem_filename):
+         raise Exception(
+             f"Problem {behavior_activity} {activity_definition} does not match problem pattern"
+         )
++
+diff --git a/libero/libero/envs/env_wrapper.py b/libero/libero/envs/env_wrapper.py
+index b5a732b..f3d3e1f 100644
+--- a/libero/libero/envs/env_wrapper.py
++++ b/libero/libero/envs/env_wrapper.py
+@@ -53,6 +53,7 @@ class ControlEnv:
+         self.problem_name = problem_info["problem_name"]
+         self.domain_name = problem_info["domain_name"]
+         self.language_instruction = problem_info["language_instruction"]
++        print(f"Creating environment for problem {self.problem_name} in domain {self.domain_name}")
+         self.env = TASK_MAPPING[self.problem_name](
+             bddl_file_name,
+             robots=robots,
+diff --git a/libero/libero/envs/problems/libero_living_room_tabletop_manipulation.py b/libero/libero/envs/problems/libero_living_room_tabletop_manipulation.py
+index 3af12d6..46af571 100644
+--- a/libero/libero/envs/problems/libero_living_room_tabletop_manipulation.py
++++ b/libero/libero/envs/problems/libero_living_room_tabletop_manipulation.py
+@@ -196,6 +196,33 @@ class Libero_Living_Room_Tabletop_Manipulation(BDDLBaseDomain):
+                 0.6182177066802979,
+             ],
+         )
++        # mujoco_arena.set_camera(
++        #     camera_name="agentview",
++        #     pos=[-0.74047936,  0.83939088,  1.1465133],
++        #     quat=[
++        #         -0.31127192, -0.16779597, 0.4438537, 0.8233761
++        #     ],
++        # )
++        # mujoco_arena.set_camera(
++        #     camera_name="agentview",
++        #     pos=[1.113, -0.016, 1.284],
++        #     quat=[0.6181, 0.3324, 0.3375, 0.6274]
++        # )        
++
++        # mujoco_arena.set_camera(
++        #     camera_name="agentview",
++        #     pos=[-0.016, 1.223, 1.644],
++        #     quat=[-0.00655, -0.00358, 0.47366, 0.88068]
++        # )
++
++        # mujoco_arena.set_camera(
++        #     camera_name="agentview",
++        #     pos=[-0.49365290666666667, 0.55959392, 0.9],
++        #     quat=[
++        #         -0.31127192, -0.16779597, 0.4438537, 0.8233761
++        #     ],
++        # )
++
+ 
+         # For visualization purpose
+         mujoco_arena.set_camera(
+diff --git a/libero/libero/envs/robots/on_the_ground_panda.py b/libero/libero/envs/robots/on_the_ground_panda.py
+index f7a8c55..019d576 100644
+--- a/libero/libero/envs/robots/on_the_ground_panda.py
++++ b/libero/libero/envs/robots/on_the_ground_panda.py
+@@ -25,6 +25,7 @@ class OnTheGroundPanda(ManipulatorModel):
+ 
+     @property
+     def default_gripper(self):
++        # return "Robotiq85Gripper"
+         return "PandaGripper"
+ 
+     @property
+@@ -35,6 +36,7 @@ class OnTheGroundPanda(ManipulatorModel):
+     def init_qpos(self):
+         return np.array(
+             [0, -1.61037389e-01, 0.00, -2.44459747e00, 0.00, 2.22675220e00, np.pi / 4]
++            # [0, 0.2416, 0, -1.6077, 0, 1.8493, -0.7854]
+         )
+ 
+     @property
+diff --git a/libero/libero/envs/utils.py b/libero/libero/envs/utils.py
+index 2a43b73..50708ad 100644
+--- a/libero/libero/envs/utils.py
++++ b/libero/libero/envs/utils.py
+@@ -4,6 +4,9 @@ import os
+ import robosuite
+ import xml.etree.ElementTree as ET
+ 
++from transforms3d import euler
++
++
+ from copy import copy
+ from robosuite.utils.mjcf_utils import find_elements, xml_path_completion
+ from robosuite.utils.placement_samplers import ObjectPositionSampler
+@@ -287,3 +290,19 @@ def rectangle2xyrange(rect_ranges):
+         x_ranges.append([rect_range[0], rect_range[2]])
+         y_ranges.append([rect_range[1], rect_range[3]])
+     return x_ranges, y_ranges
++
++
++def convert_spherical_to_pos_quat(r_theta_phi):
++    """
++    Converts spherical coordinates (physics convention) into Euclidean position
++    and quaternion rotation, such that -z points at the origin.
++    """
++    r, theta, phi = r_theta_phi
++    pos = [
++        r * np.sin(theta) * np.cos(phi),
++        r * np.sin(theta) * np.sin(phi),
++        r * np.cos(theta),
++    ]
++    euler_zxy = (np.pi / 2 + phi, theta, 0)
++    quat_wxyz = euler.euler2quat(*euler_zxy, axes="rzxy")
++    return pos, quat_wxyz
+diff --git a/libero/libero/envs/venv.py b/libero/libero/envs/venv.py
+index ed1fd40..28bd495 100644
+--- a/libero/libero/envs/venv.py
++++ b/libero/libero/envs/venv.py
+@@ -1,6 +1,6 @@
+ import cloudpickle
+ import ctypes
+-import gym
++import gymnasium as gym
+ import numpy as np
+ import numpy as np
+ import warnings
+diff --git a/libero/__init__.py b/libero/__init__.py
+new file mode 100644
+index 0000000..e69de29

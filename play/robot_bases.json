@@ -1,0 +1,62 @@
+{
+ "libero_tabletop_manipulation": {
+  "base": [
+   -0.66,
+   0.0,
+   0.912
+  ],
+  "ws": [
+   0.0,
+   0.0,
+   0.9
+  ]
+ },
+ "libero_floor_manipulation": {
+  "base": [
+   -0.6,
+   0.0,
+   0.0
+  ],
+  "ws": [
+   0.0,
+   0.0,
+   -0.035
+  ]
+ },
+ "libero_kitchen_tabletop_manipulation": {
+  "base": [
+   -0.66,
+   0.0,
+   0.912
+  ],
+  "ws": [
+   0.0,
+   0.0,
+   0.9
+  ]
+ },
+ "libero_living_room_tabletop_manipulation": {
+  "base": [
+   -0.51,
+   0.0,
+   0.42
+  ],
+  "ws": [
+   0.0,
+   0.0,
+   0.41
+  ]
+ },
+ "libero_study_tabletop_manipulation": {
+  "base": [
+   -0.75,
+   0.0,
+   0.912
+  ],
+  "ws": [
+   -0.2,
+   0.0,
+   0.867
+  ]
+ }
+}
