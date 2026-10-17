@@ -1,0 +1,232 @@
+<title>RoboTwin Play Episodes</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700&family=Source+Sans+3:wght@400;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: a lab notebook for one simulator: player + action log side by side, comparison below. */
+:root {
+  --bg: #f3f5f6; --panel: #ffffff; --ink: #1c2328; --ink-2: #4c5862; --ink-3: #7a8690;
+  --line: #d8dee2; --accent: #0f6e8a; --ok: #2f7d4f; --bad: #b4452f; --expert: #8a8f96;
+  --left: #3d6fb6; --right: #c27a1e;
+  --f-display: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  --f-body: "Source Sans 3", "Segoe UI", Roboto, sans-serif;
+  --f-mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #12171a; --panel: #1a2125; --ink: #e5eaed; --ink-2: #aeb8bf; --ink-3: #7f8a92;
+  --line: #2c363c; --accent: #4fb3cf; --ok: #5cbf83; --bad: #e07a63; --expert: #7d848b;
+  --left: #7aa4e6; --right: #e0a457; color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --bg: #12171a; --panel: #1a2125; --ink: #e5eaed; --ink-2: #aeb8bf; --ink-3: #7f8a92;
+  --line: #2c363c; --accent: #4fb3cf; --ok: #5cbf83; --bad: #e07a63; --expert: #7d848b;
+  --left: #7aa4e6; --right: #e0a457; color-scheme: dark; }
+body { background: var(--bg); color: var(--ink); font: 16px/1.5 var(--f-body); }
+.wrap { max-width: 1180px; margin: 0 auto; padding-block: 28px 56px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: grid; gap: 36px; }
+h1, h2, h3 { font-family: var(--f-display); margin: 0; text-wrap: balance; letter-spacing: -0.01em; }
+h1 { font-size: 2rem; }
+h2 { font-size: 1.35rem; }
+h3 { font-size: 1rem; }
+p { margin: 0; max-width: 68ch; color: var(--ink-2); }
+.eyebrow { font: 500 0.75rem var(--f-mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); }
+header { display: grid; gap: 10px; }
+.facts { display: flex; flex-wrap: wrap; gap: 8px 22px; font: 0.85rem var(--f-mono); color: var(--ink-3); }
+.facts b { color: var(--ink); font-weight: 500; }
+section { display: grid; gap: 14px; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip { font: 500 0.82rem var(--f-mono); padding: 6px 11px; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--panel); color: var(--ink-2); cursor: pointer; font-variant-numeric: tabular-nums; }
+.chip:hover { border-color: var(--accent); color: var(--ink); }
+.chip[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--panel); }
+.chip:focus-visible, .act:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.player { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); gap: 20px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
+@media (max-width: 860px) { .player { grid-template-columns: minmax(0, 1fr); } }
+.vidcol { display: grid; gap: 10px; min-width: 0; }
+video { width: 100%; max-width: 100%; aspect-ratio: 4 / 3; background: #000; border-radius: 6px; display: block; }
+.camkey { display: grid; grid-template-columns: 1fr 1fr; font: 0.72rem var(--f-mono); color: var(--ink-3); }
+.camkey span:nth-child(even) { text-align: right; }
+.scene { font-size: 0.92rem; color: var(--ink-2); }
+.scene b { color: var(--ink); font-weight: 600; }
+.timeline { position: relative; height: 34px; border-radius: 4px; background: var(--bg); overflow: hidden; cursor: pointer; }
+.timeline .seg { position: absolute; top: 4px; bottom: 12px; border-radius: 3px; opacity: 0.9; }
+.timeline .grip { position: absolute; left: 0; right: 0; bottom: 2px; height: 8px; }
+.timeline .cursor { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--ink); left: 0; }
+.tlkey { display: flex; flex-wrap: wrap; gap: 4px 16px; font: 0.75rem var(--f-mono); color: var(--ink-3); }
+.tlkey i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+.log { display: grid; gap: 6px; align-content: start; min-width: 0; }
+.act { display: grid; grid-template-columns: 52px minmax(0, 1fr) auto; gap: 10px; align-items: baseline; text-align: left;
+  font: inherit; color: inherit; background: transparent; border: 1px solid transparent; border-radius: 6px; padding: 8px 10px; cursor: pointer; }
+.act:hover { border-color: var(--line); }
+.act.on { background: var(--bg); border-color: var(--line); }
+.act .t { font: 0.78rem var(--f-mono); color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.act .l { font-size: 0.95rem; overflow-wrap: anywhere; }
+.act .m { display: block; font: 0.75rem var(--f-mono); color: var(--ink-3); margin-top: 2px; }
+.pill { font: 600 0.72rem var(--f-mono); padding: 2px 8px; border-radius: 999px; border: 1px solid currentColor; white-space: nowrap; }
+.pill.ok { color: var(--ok); } .pill.no { color: var(--bad); }
+.two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px; }
+@media (max-width: 860px) { .two { grid-template-columns: minmax(0, 1fr); } }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; display: grid; gap: 12px; min-width: 0; }
+.tbl { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); }
+th { font: 500 0.72rem var(--f-mono); letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-3); }
+td.n { text-align: right; font-family: var(--f-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.chart svg { width: 100%; height: auto; display: block; }
+.chart text { fill: var(--ink-3); font: 11px var(--f-mono); }
+.legend { display: flex; gap: 16px; font: 0.78rem var(--f-mono); color: var(--ink-2); }
+.legend i { display: inline-block; width: 12px; height: 3px; margin-right: 6px; vertical-align: 3px; }
+ul.notes { margin: 0; padding-left: 1.1rem; display: grid; gap: 8px; max-width: 78ch; color: var(--ink-2); }
+ul.notes b { color: var(--ink); }
+code { font: 0.86em var(--f-mono); }
+#tip { position: fixed; pointer-events: none; background: var(--ink); color: var(--bg); font: 0.75rem var(--f-mono); padding: 4px 7px; border-radius: 4px; z-index: 5; }
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">RoboTwin 2.0 · aloha-agilex · first version</div>
+    <h1>RoboTwin play episodes</h1>
+    <p>Unscripted play on RoboTwin's two-armed robot: random tabletop scenes, and a robot that moves, stacks, pushes, turns and passes things between its hands. Every motion goes through RoboTwin's own planner and recorder, so the data has the same format and action statistics as RoboTwin's scripted expert demos. So far 16 of the 39 actions on this page succeed; failures are shown as they happened.</p>
+    <div class="facts" id="facts"></div>
+  </header>
+
+  <section>
+    <h2>Episodes</h2>
+    <div class="chips" id="chips" role="group" aria-label="Episode"></div>
+    <div class="player">
+      <div class="vidcol">
+        <video id="vid" controls muted playsinline preload="metadata"></video>
+        <div class="camkey"><span>head camera</span><span>front camera</span><span>left wrist</span><span>right wrist</span></div>
+        <div class="timeline" id="tl" aria-label="Actions over time; click to seek"><div class="cursor" id="cur"></div></div>
+        <div class="tlkey">
+          <span><i style="background:var(--ok)"></i>action succeeded</span>
+          <span><i style="background:var(--bad)"></i>action failed</span>
+          <span><i style="background:var(--left)"></i>left gripper closed</span>
+          <span><i style="background:var(--right)"></i>right gripper closed</span>
+        </div>
+        <div class="scene" id="scene"></div>
+      </div>
+      <div class="log">
+        <h3>What the robot did</h3>
+        <div id="acts"></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Compared with RoboTwin's expert data</h2>
+    <p>The comparison data is RoboTwin's released aloha-agilex demos (clean, 50 per task) for 10 tasks. In both, the action at a frame is the joint target of the next frame, recorded at about 16.7 Hz.</p>
+    <div class="two">
+      <div class="card">
+        <h3>Action statistics</h3>
+        <div class="tbl"><table id="stats"></table></div>
+      </div>
+      <div class="card chart">
+        <h3>Largest joint step per frame, while moving</h3>
+        <div class="legend"><span><i style="background:var(--accent)"></i>play</span><span><i style="background:var(--expert)"></i>expert</span></div>
+        <div id="hist"></div>
+      </div>
+    </div>
+    <div class="card">
+      <h3>An expert demo for reference</h3>
+      <div class="two">
+        <video id="expvid" controls muted playsinline preload="metadata"></video>
+        <p id="exptext"></p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Where this stands</h2>
+    <ul class="notes">
+      <li><b>Working:</b> random scenes of 3–5 objects from RoboTwin's library (only objects with annotated grasp points) plus often a container; moving things to another spot (7 of 11 succeeded on this page) and turning them around (4 of 6). Every grasp and put-down is checked with the planner before the arm moves, and plans that would take a joint outside the range the expert data uses are rejected.</li>
+      <li><b>Not working yet:</b> stacking succeeds 1 time in 7, handing an object from one hand to the other has not succeeded yet (0 of 3, plus 0 of 3 put-ins that go through a hand-over), and pushes succeed 4 times in 9. A failed attempt still looks like an attempt (the arm goes to the object and comes back), but these are bugs to fix, not intended errors.</li>
+      <li><b>Not ported from LIBERO yet:</b> injected errors, the microwave and cabinet, line-ups and knocks.</li>
+      <li><b>Files:</b> each episode is saved in RoboTwin's current format (<code>data/</code>) and in the format of its released datasets (<code>data_released/</code>), from the same recordings.</li>
+    </ul>
+  </section>
+</div>
+<div id="tip" hidden></div>
+
+<script>
+const DATA = __DATA__;
+const $ = (s) => document.querySelector(s);
+const FPS = DATA.fps;
+const fmt = (f) => { const s = f / FPS; return `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`; };
+const tot = DATA.episodes.reduce((a, e) => [a[0] + e.segments.length, a[1] + e.segments.filter((s) => s.ok).length, a[2] + e.frames], [0, 0, 0]);
+$("#facts").innerHTML = `<span><b>${DATA.episodes.length}</b> episodes</span><span><b>${tot[0]}</b> actions, <b>${tot[1]}</b> succeeded</span><span><b>${Math.round(tot[2] / FPS / 60)}</b> min of play</span><span><b>4</b> cameras</span>`;
+const kindName = { move: "move", put_in: "put in", stack: "stack", push: "push", reorient: "turn around", handover: "hand over" };
+let cur = null;
+const vid = $("#vid"), tip = $("#tip");
+function load(i) {
+  cur = DATA.episodes[i];
+  document.querySelectorAll(".chip").forEach((c, j) => c.setAttribute("aria-pressed", j === i ? "true" : "false"));
+  vid.src = `media/${cur.key}.mp4`; vid.load();
+  $("#scene").innerHTML = `<b>On the table:</b> ${cur.objects.join(", ")}${cur.containers.length ? ` (container: ${cur.containers.join(", ")})` : ""}`;
+  const tl = $("#tl");
+  tl.querySelectorAll(".seg,.grip").forEach((x) => x.remove());
+  for (const s of cur.segments) {
+    const d = document.createElement("div");
+    d.className = "seg";
+    d.style.left = `${100 * s.s / cur.frames}%`; d.style.width = `${100 * (s.e - s.s) / cur.frames}%`;
+    d.style.background = `var(${s.ok ? "--ok" : "--bad"})`;
+    d.addEventListener("mousemove", (e) => { tip.hidden = false; tip.textContent = s.lang; tip.style.left = `${e.clientX + 12}px`; tip.style.top = `${e.clientY + 12}px`; });
+    d.addEventListener("mouseleave", () => { tip.hidden = true; });
+    tl.insertBefore(d, $("#cur"));
+  }
+  // gripper bar: which hand is closed
+  const g = document.createElement("canvas"); g.className = "grip"; g.width = 600; g.height = 8;
+  const ctx = g.getContext("2d"); const cs = getComputedStyle(document.documentElement);
+  const n = cur.grip.length;
+  cur.grip.forEach(([l, r], k) => {
+    const x = Math.floor(600 * k / n), w = Math.ceil(600 / n) + 1;
+    if (l < 0.5) { ctx.fillStyle = cs.getPropertyValue("--left"); ctx.fillRect(x, 0, w, 4); }
+    if (r < 0.5) { ctx.fillStyle = cs.getPropertyValue("--right"); ctx.fillRect(x, 4, w, 4); }
+  });
+  tl.insertBefore(g, $("#cur"));
+  $("#acts").innerHTML = cur.segments.map((s, j) => `<button class="act" data-j="${j}">
+      <span class="t">${fmt(s.s)}</span>
+      <span class="l">${s.lang}<span class="m">${kindName[s.p] || s.p}${s.via ? " via hand-over" : ""} · ${s.arm.replace("->", " → ")} arm${s.arm.includes("->") ? "s" : ""}</span></span>
+      <span class="pill ${s.ok ? "ok" : "no"}">${s.ok ? "done" : "failed"}</span></button>`).join("");
+  document.querySelectorAll(".act").forEach((b) => b.addEventListener("click", () => { vid.currentTime = cur.segments[+b.dataset.j].s / FPS; vid.play().catch(() => {}); }));
+}
+$("#chips").innerHTML = DATA.episodes.map((e, i) => `<button class="chip" aria-pressed="false">${e.objects.slice(0, 2).join(" + ")}${e.objects.length > 2 ? " +" + (e.objects.length - 2) : ""}</button>`).join("");
+document.querySelectorAll(".chip").forEach((c, i) => c.addEventListener("click", () => load(i)));
+$("#tl").addEventListener("click", (e) => { const r = $("#tl").getBoundingClientRect(); vid.currentTime = (e.clientX - r.left) / r.width * cur.frames / FPS; });
+vid.addEventListener("timeupdate", () => {
+  if (!cur) return; const f = vid.currentTime * FPS;
+  $("#cur").style.left = `${Math.min(100, 100 * f / cur.frames)}%`;
+  document.querySelectorAll(".act").forEach((b) => { const s = cur.segments[+b.dataset.j]; b.classList.toggle("on", f >= s.s && f < s.e); });
+});
+load(DATA.episodes.findIndex((e) => e.key === "play_v5_4") >= 0 ? DATA.episodes.findIndex((e) => e.key === "play_v5_4") : 0);
+
+// stats table
+const pct = (v) => (100 * v).toFixed(1) + "%";
+const fmtRow = (name, v) => name.startsWith("Frames") ? pct(v) : name.includes("switches") ? v.toFixed(2) : v.toFixed(3);
+const S = DATA.stats;
+$("#stats").innerHTML = `<tr><th>Measure</th><th style="text-align:right">Play</th><th style="text-align:right">Expert</th></tr>` +
+  S.rows.filter((r) => !r[0].startsWith("Median joint")).map((r) => `<tr><td>${r[0]}</td><td class="n">${fmtRow(r[0], r[1])}</td><td class="n">${fmtRow(r[0], r[2])}</td></tr>`).join("") +
+  `<tr><td>Recorded frames compared</td><td class="n">${S.frames_play.toLocaleString()}</td><td class="n">${S.frames_ref.toLocaleString()}</td></tr>`;
+
+// histogram: two step lines on one scale
+(function () {
+  const W = 520, H = 220, l = 44, r = 12, t = 10, b = 34;
+  const bins = S.hist.bins, n = bins.length - 1;
+  const ymax = Math.max(...S.hist.play, ...S.hist.expert) * 1.1;
+  const x = (v) => l + (W - l - r) * (v - bins[0]) / (bins[n] - bins[0]);
+  const y = (v) => t + (H - t - b) * (1 - v / ymax);
+  const path = (h) => h.map((v, i) => `${i ? "L" : "M"}${x(bins[i])},${y(v)} L${x(bins[i + 1])},${y(v)}`).join(" ");
+  let s = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Histogram of the largest joint step per frame, play vs expert">`;
+  for (const v of [0, 0.03, 0.06, 0.09, 0.12]) s += `<line x1="${x(v)}" x2="${x(v)}" y1="${t}" y2="${H - b}" stroke="var(--line)"/><text x="${x(v)}" y="${H - b + 16}" text-anchor="middle">${v.toFixed(2)}</text>`;
+  const step = ymax > 0.2 ? 0.1 : 0.05;
+  for (let v = 0; v <= ymax; v += step) s += `<line x1="${l}" x2="${W - r}" y1="${y(v)}" y2="${y(v)}" stroke="var(--line)"/><text x="${l - 6}" y="${y(v) + 4}" text-anchor="end">${Math.round(v * 100)}%</text>`;
+  s += `<text x="${(l + W - r) / 2}" y="${H - 4}" text-anchor="middle">rad per frame (last bin includes larger)</text>`;
+  s += `<path d="${path(S.hist.expert)}" fill="none" stroke="var(--expert)" stroke-width="2"/>`;
+  s += `<path d="${path(S.hist.play)}" fill="none" stroke="var(--accent)" stroke-width="2"/>`;
+  $("#hist").innerHTML = s + "</svg>";
+})();
+$("#expvid").src = DATA.expert.file;
+$("#exptext").textContent = `RoboTwin's own scripted demo: ${DATA.expert.task}, ${fmt(DATA.expert.frames)} long, same cameras. Play episodes run about a minute and do several things in a row instead of one task.`;
+</script>
