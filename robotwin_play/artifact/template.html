@@ -49,8 +49,7 @@ section { display: grid; gap: 14px; }
 @media (max-width: 860px) { .player { grid-template-columns: minmax(0, 1fr); } }
 .vidcol { display: grid; gap: 10px; min-width: 0; }
 video { width: 100%; max-width: 100%; aspect-ratio: 4 / 3; background: #000; border-radius: 6px; display: block; }
-.camkey { display: grid; grid-template-columns: 1fr 1fr; font: 0.72rem var(--f-mono); color: var(--ink-3); }
-.camkey span:nth-child(even) { text-align: right; }
+.camkey { font: 0.72rem var(--f-mono); color: var(--ink-3); }
 .scene { font-size: 0.92rem; color: var(--ink-2); }
 .scene b { color: var(--ink); font-weight: 600; }
 .timeline { position: relative; height: 34px; border-radius: 4px; background: var(--bg); overflow: hidden; cursor: pointer; }
@@ -102,7 +101,7 @@ code { font: 0.86em var(--f-mono); }
     <div class="player">
       <div class="vidcol">
         <video id="vid" controls muted playsinline preload="metadata"></video>
-        <div class="camkey"><span>head camera</span><span>front camera</span><span>left wrist</span><span>right wrist</span></div>
+        <div class="camkey"><span>wide view from the front (for viewing; the dataset has RoboTwin's head, front and wrist cameras)</span></div>
         <div class="timeline" id="tl" aria-label="Actions over time; click to seek"><div class="cursor" id="cur"></div></div>
         <div class="tlkey">
           <span><i style="background:var(--ok)"></i>action succeeded</span>
@@ -162,7 +161,7 @@ const FPS = DATA.fps;
 const fmt = (f) => { const s = f / FPS; return `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`; };
 const tot = DATA.episodes.reduce((a, e) => [a[0] + e.segments.length, a[1] + e.segments.filter((s) => s.ok).length, a[2] + e.frames], [0, 0, 0]);
 $("#facts").innerHTML = `<span><b>${DATA.episodes.length}</b> episodes</span><span><b>${tot[0]}</b> actions, <b>${tot[1]}</b> succeeded</span><span><b>${Math.round(tot[2] / FPS / 60)}</b> min of play</span><span><b>4</b> cameras</span>`;
-const kindName = { move: "move", put_in: "put in", stack: "stack", push: "push", reorient: "turn around", handover: "hand over", line_up: "line up", press: "press", shake: "shake", knock_with: "tap with a tool", dual_pick: "pick two at once", lift_together: "lift with both hands", pour: "tip out" };
+const kindName = { move: "move", put_in: "put in", stack: "stack", push: "push", reorient: "turn around", handover: "hand over", line_up: "line up", press: "press", shake: "shake", knock_with: "tap with a tool", dual_pick: "pick two at once", lift_together: "lift with both hands", pour: "tip out", open: "open", close: "close", toggle: "switch" };
 let cur = null;
 const vid = $("#vid"), tip = $("#tip");
 function load(i) {

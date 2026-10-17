@@ -37,10 +37,18 @@ for run, ids in RUNS:
         if r is None or "segments" not in r:
             continue
         key = f"{os.path.basename(run)}_{ep}"
-        n, q = grid_video(f"{run}/data_released/episode{ep}.hdf5", f"{OUT}/media/{key}.mp4")
+        viz = f"{run}/viz/episode{ep}.mp4"
+        if os.path.exists(viz):   # the wide showcase camera (not a recorded observation)
+            subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", viz, "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                            "-crf", "27", "-preset", "slow", "-movflags", "+faststart", f"{OUT}/media/{key}.mp4"], check=True)
+            with h5py.File(f"{run}/data_released/episode{ep}.hdf5") as f:
+                q = f["joint_action/vector"][:]
+            n = len(q)
+        else:
+            n, q = grid_video(f"{run}/data_released/episode{ep}.hdf5", f"{OUT}/media/{key}.mp4")
         eps.append(dict(key=key, run=os.path.basename(run), ep=ep, frames=n, kind=r.get("kind", os.path.basename(run).split("_")[-1]),
                         objects=[s["name"].split("_", 1)[1].replace("-", " ").replace("_", " ") for s in r["scene"]],
-                        containers=[s["name"].split("_", 1)[1].replace("-", " ") for s in r["scene"] if s["container"]],
+                        containers=[s["name"].split("_", 1)[1].replace("-", " ") for s in r["scene"] if s.get("container")],
                         segments=[dict(s=s["start"], e=min(s["end"], n), p=s["primitive"], ok=bool(s["success"]),
                                        lang=s["language"], arm=s["arm"], via=s.get("via"),
                                        err=(s.get("error") or {}).get("type"), severe=bool((s.get("error") or {}).get("severe"))) for s in r["segments"]],

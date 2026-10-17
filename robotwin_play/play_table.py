@@ -16,6 +16,7 @@ Linked into RoboTwin as envs/play_table.py (see robotwin_play/README.md)."""
 import glob
 import json
 import os
+import subprocess
 
 import numpy as np
 import sapien
@@ -45,6 +46,19 @@ GRASPABLE = [
 CONTAINERS = ["002_bowl", "003_plate", "008_tray", "110_basket", "062_plasticbox", "076_breadbasket"]
 OPEN_TOP = ["002_bowl", "110_basket", "062_plasticbox"]   # can be tipped out
 TOOLS = ["020_hammer", "084_woodenmallet", "100_seal", "058_markpen", "093_brush-pen"]
+# Articulated fixtures, placed the way RoboTwin's own tasks place them
+# (open_microwave, put_object_cabinet, open_laptop, turn_switch). ids index
+# the model folders; cps are the handle contact points the hand grasps.
+FIXTURES = {
+    "044_microwave": dict(ids=[0, 1], x=(-0.12, -0.02), y=(0.15, 0.2), z=(0.8, 0.8), q=[0.707, 0, 0, 0.707],
+                          yaw=0.0, cps=[0, 1], props=(0.0, 0.0), word="microwave door"),
+    "036_cabinet": dict(ids=[46653], x=(-0.05, 0.05), y=(0.155, 0.155), z=(0.741, 0.741), q=[1, 0, 0, 1],
+                        yaw=0.0, cps=[0, 1], props=None, word="drawer"),
+    "015_laptop": dict(ids=list(range(11)), x=(-0.05, 0.05), y=(-0.1, 0.05), z=(0.741, 0.741), q=[0.7, 0, 0, 0.7],
+                       yaw=np.pi / 3, cps=[0, 1, 2], props=(1.0, 0.0), word="laptop"),
+    "056_switch": dict(ids=list(range(8)), x=(-0.25, 0.25), y=(0.0, 0.1), z=(0.81, 0.84), q=[0.704141, 0, 0, 0.71006],
+                       yaw=np.pi / 4, cps=[0], props=None, word="switch"),
+}
 SHAKEABLE = ["001_bottle", "114_bottle", "049_shampoo", "101_milk-tea", "105_sauce-can", "109_hydrating-oil",
              "115_perfume", "080_pillbottle", "071_can", "068_boxdrink"]   # things one shakes (RoboTwin: shake_bottle)
 # flat-topped things something can stand on (as in RoboTwin's block / bowl stacking)
@@ -113,6 +127,52 @@ class play_table(Base_Task):
         self.err = None
         self.action_steps, self.action_len = 0, 2500
         super()._init_task_env_(**kwags)
+        self._viz = None
+        self._viz_cam = self._add_viz_camera() if self.save_data and kwags.get("play", {}).get("viz_video", True) else None
+
+    # -------------------------------------------------------------- showcase
+    VIZ_W, VIZ_H = 640, 480
+
+    def _add_viz_camera(self):
+        """The agent's view (RoboTwin's head camera pose) with a wide lens, so
+        both arms and the whole tabletop stay in frame. For showcase videos
+        only: not part of the recorded observations (the head camera itself
+        is a 37 deg D435 that crops the arms)."""
+        names = self.cameras.static_camera_name
+        head = self.cameras.static_camera_list[names.index("head_camera")] if "head_camera" in names else None
+        cam = self.scene.add_camera(name="play_viz_camera", width=self.VIZ_W, height=self.VIZ_H,
+                                    fovy=np.deg2rad(75), near=0.05, far=10)
+        if head is not None:
+            cam.entity.set_pose(head.entity.get_pose())
+        else:
+            pos, look = np.array([-0.032, -0.45, 1.35]), np.array([0.0, 0.0, 0.75])
+            f = (look - pos) / np.linalg.norm(look - pos)
+            l = np.cross([0, 0, 1], f); l /= np.linalg.norm(l)
+            m = np.eye(4); m[:3, :3] = np.stack([f, l, np.cross(f, l)], 1); m[:3, 3] = pos
+            cam.entity.set_pose(sapien.Pose(m))
+        return cam
+
+    def _take_picture(self):
+        super()._take_picture()
+        if not self.save_data or self._viz_cam is None:
+            return
+        if self._viz is None:
+            d = os.path.join(self.save_dir, "viz")
+            os.makedirs(d, exist_ok=True)
+            self._viz = subprocess.Popen(
+                ["ffmpeg", "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24",
+                 "-s", f"{self.VIZ_W}x{self.VIZ_H}", "-r", f"{250 / 15:.4f}", "-i", "-", "-c:v", "libx264",
+                 "-pix_fmt", "yuv420p", "-crf", "26", "-preset", "medium", "-movflags", "+faststart",
+                 os.path.join(d, f"episode{self.ep_num}.mp4")], stdin=subprocess.PIPE)
+        self._viz_cam.take_picture()
+        im = (self._viz_cam.get_picture("Color")[:, :, :3] * 255).clip(0, 255).astype(np.uint8)
+        self._viz.stdin.write(np.ascontiguousarray(im).tobytes())
+
+    def close_viz(self):
+        if getattr(self, "_viz", None) is not None:
+            self._viz.stdin.close()
+            self._viz.wait()
+            self._viz = None
 
     # ------------------------------------------------------------------ robot
     def load_robot(self, **kwags):
@@ -149,9 +209,15 @@ class play_table(Base_Task):
 
     def load_actors(self):
         cfg = self.play_cfg
-        self.objects, self.containers = [], []
+        self.objects, self.containers, self.fixtures = [], [], []
         placed = []
-        n_obj = int(self.prng.integers(cfg.get("min_objects", 3), cfg.get("max_objects", 5) + 1))
+        fx = None
+        if self.prng.random() < cfg.get("p_fixture", 0.45):
+            fx = self._spawn_fixture(str(self.prng.choice(cfg.get("fixtures", list(FIXTURES)))))
+            if fx is not None:
+                lo, hi = self._aabb(fx)
+                placed.append((0.5 * (lo + hi)[:2], 0.5 * float(np.linalg.norm((hi - lo)[:2]))))
+        n_obj = int(self.prng.integers(cfg.get("min_objects", 3), cfg.get("max_objects", 5) + 1)) - (fx is not None)
         names = list(self.prng.choice(GRASPABLE, size=n_obj, replace=False))
         if self.prng.random() < cfg.get("p_tool", 0.4) and not any(n in TOOLS for n in names):
             names[-1] = str(self.prng.choice(TOOLS))
@@ -170,14 +236,79 @@ class play_table(Base_Task):
             placed.append((xy, r))
             (self.containers if is_cont else self.objects).append(actor)
             self.add_prohibit_area(actor, padding=0.02)
-        self.scene_desc = [dict(name=a.get_name(), container=a in self.containers) for a in self.containers + self.objects]
+        self.scene_desc = ([dict(name=f.get_name(), fixture=True) for f in self.fixtures] +
+                           [dict(name=a.get_name(), container=a in self.containers) for a in self.containers + self.objects])
+
+    def _spawn_fixture(self, name):
+        spec = FIXTURES[name]
+        mid = int(self.prng.choice(spec["ids"]))
+        np.random.seed(int(self.prng.integers(2 ** 31)))    # rand_pose draws from np.random
+        fx = rand_create_sapien_urdf_obj(scene=self, modelname=name, modelid=mid, xlim=list(spec["x"]),
+                                         ylim=list(spec["y"]), zlim=list(spec["z"]), rotate_rand=spec["yaw"] > 0,
+                                         rotate_lim=[0, 0, spec["yaw"]], qpos=spec["q"], fix_root_link=True)
+        fx.set_mass(0.01)
+        if spec["props"] is not None:
+            fx.set_properties(*spec["props"])
+        fx.play_name, fx.play_mid = name, mid
+        lo, hi = fx.get_qlimits()[self._fixture_joint(fx)[1]]
+        start = {"044_microwave": (0.0, 0.0), "036_cabinet": (0.0, 0.0), "015_laptop": (0.15, 0.25),
+                 "056_switch": (0.0, 1.0)}[name]
+        q = fx.get_qpos().copy()
+        q[self._fixture_joint(fx)[1]] = lo + (hi - lo) * float(self.prng.uniform(*start))
+        if name == "056_switch":
+            q[self._fixture_joint(fx)[1]] = lo if self.prng.random() < 0.5 else hi
+        fx.set_qpos(q)
+        self.add_prohibit_area(fx, padding=0.02)
+        self.fixtures.append(fx)
+        return fx
 
     # --------------------------------------------------------------- helpers
     def _aabb(self, actor):
         import sapien.physx as px
+        if isinstance(actor.actor, px.PhysxArticulation):
+            boxes = [L.compute_global_aabb_tight() for L in actor.actor.get_links() if L.get_collision_shapes()]
+            return np.min([b[0] for b in boxes], 0), np.max([b[1] for b in boxes], 0)
         comp = actor.actor.find_component_by_type(px.PhysxRigidDynamicComponent)
         lo, hi = comp.compute_global_aabb_tight()
         return np.asarray(lo), np.asarray(hi)
+
+    def _is_fixture(self, a):
+        return a in getattr(self, "fixtures", [])
+
+    def _fixture_joint(self, fx, cp=None):
+        """(joint, index in qpos) of the joint that moves the handle (contact
+        point `cp`, default the fixture's first)."""
+        cp = FIXTURES[fx.play_name]["cps"][0] if cp is None else cp
+        link = fx.link_dict[fx.config["contact_points"][cp]["base"]]
+        active = [a.get_name() for a in fx.actor.get_active_joints()]
+        L = link
+        while L is not None:
+            j = L.get_joint()
+            if j is not None and j.get_name() in active:
+                return j, active.index(j.get_name())
+            L = L.get_parent()
+        if len(active) == 1:    # the switch's press point sits on its fixed base: the one joint is the rocker
+            return fx.actor.get_active_joints()[0], 0
+        raise ValueError(f"no active joint above {link.get_name()}")
+
+    def _fixture_frac(self, fx):
+        j, i = self._fixture_joint(fx)
+        lo, hi = fx.get_qlimits()[i]
+        return float((fx.get_qpos()[i] - lo) / max(hi - lo, 1e-6))
+
+    def _moved_by(self, fx, T, dq):
+        """World transform T carried along by the fixture's joint moving by dq."""
+        j, _ = self._fixture_joint(fx)
+        J = j.get_global_pose().to_transformation_matrix()
+        axis, o = J[:3, 0], J[:3, 3]
+        M = np.eye(4)
+        if j.type == "prismatic":
+            M[:3, 3] = axis * dq
+        else:
+            R = t3d.axangles.axangle2mat(axis, dq)
+            M[:3, :3] = R
+            M[:3, 3] = o - R @ o
+        return M @ T
 
     def _name(self, actor):
         return actor.get_name().split("_", 1)[-1].replace("-", " ").replace("_", " ")
@@ -236,7 +367,7 @@ class play_table(Base_Task):
         """A free table spot (on `side` if given; within near=(xy, radius) if given)."""
         xs = {"left": (-0.25, -0.06), "right": (0.06, 0.25), None: (-0.25, 0.25)}[side]
         p0 = actor.get_pose().p[:2]
-        others = [a for a in self.objects + self.containers if a is not actor and self._on_table(a)]
+        others = [a for a in self.objects + self.containers if a is not actor and self._on_table(a)] + self.fixtures
         for i in range(100):
             if near is not None:
                 d = near[1] * (0.0 if i == 0 else np.sqrt(self.prng.uniform(0, 1)))
@@ -279,11 +410,11 @@ class play_table(Base_Task):
         conts = [c for c in ign if c in self.containers]
         base = planner.robot_origion_pose
         cub = {"table": {"dims": [0.7, 2, 0.04], "pose": [float(base.p[1]), 0.0, 0.74 - float(base.p[2]), 1, 0, 0, 0.0]}}
-        for a in self.objects + self.containers:
-            if a in ign or not self._on_table(a) or any(self._inside(a, c) for c in conts):
+        for a in self.objects + self.containers + self.fixtures:
+            if a in ign or not (self._is_fixture(a) or self._on_table(a)) or any(self._inside(a, c) for c in conts):
                 continue
             lo, hi = self._aabb(a)
-            small = max((hi - lo)[:2]) < 0.15 and (hi - lo)[2] < 0.12   # big things stay obstacles even next to the target
+            small = max((hi - lo)[:2]) < 0.15 and (hi - lo)[2] < 0.12 and not self._is_fixture(a)   # big things stay obstacles even next to the target
             if near is not None and small and np.linalg.norm(np.clip(np.asarray(near[:2], dtype=float), lo[:2], hi[:2]) - np.asarray(near[:2], dtype=float)) < 0.12:
                 continue
             p, R = self._planner_frame(planner, arm, 0.5 * (lo + hi))
@@ -902,7 +1033,7 @@ class play_table(Base_Task):
         R = t3d.quaternions.quat2mat(anchor.get_pose().q)
         lo, hi = self._aabb(anchor)
         alo, ahi = self._aabb(actor)
-        others = [a for a in self.objects + self.containers if a not in (actor, anchor)]
+        others = [a for a in self.objects + self.containers if a not in (actor, anchor)] + self.fixtures
         cands = []
         for u in (R[:, 0], -R[:, 0], R[:, 2], -R[:, 2]):
             u = np.array([u[0], u[1]])
@@ -1023,6 +1154,8 @@ class play_table(Base_Task):
         arm = self._arm_for(p)
         q = TOPDOWN[str(arm)]
         others = [o for o in self.objects + self.containers if o is not actor]
+        if any(self._clear(p[:2], actor, [f]) is False for f in self.fixtures):
+            return None   # right against a fixture: no room for the hand
         for _ in range(8):
             ang = self.prng.uniform(-np.pi, np.pi)
             d = np.array([np.cos(ang), np.sin(ang)])
@@ -1079,6 +1212,121 @@ class play_table(Base_Task):
         dq = t3d.quaternions.qmult(t3d.quaternions.qinverse(q0), actor.get_pose().q)
         ok = turned and abs(dq[0]) < 0.96 and placed
         return self._finish(actor, arm, placed, ok, lang)
+
+    # ------------------------------------------------------------ fixtures
+    def _operate(self, fx, target_frac, lang):
+        """Grasp the fixture's handle and move the hand along the joint's own
+        arc (door, lid) or slide (drawer) until the joint is at target_frac of
+        its range, in short planned segments; let go and back off."""
+        j, qi = self._fixture_joint(fx)
+        lo, hi = fx.get_qlimits()[qi]
+        q0 = float(fx.get_qpos()[qi])
+        dq_total = lo + (hi - lo) * target_frac - q0
+        p = fx.get_pose().p
+        best = None
+        for arm in (self._arm_for(p), self._arm_for(p).opposite):
+            for cp, flip in [(c, f) for c in FIXTURES[fx.play_name]["cps"] for f in (0.0, np.pi)]:
+                pre = self.get_grasp_pose(fx, arm, contact_point_id=cp, pre_dis=0.08)
+                pose = self.get_grasp_pose(fx, arm, contact_point_id=cp, pre_dis=0.0)
+                if pre is None or pose is None:
+                    continue
+                if flip:   # the gripper is symmetric: the hand turned about its own axis is the same grasp
+                    fq = t3d.quaternions.axangle2quat([1, 0, 0], flip)
+                    pre = list(pre[:3]) + list(t3d.quaternions.qmult(pre[3:], fq))
+                    pose = list(pose[:3]) + list(t3d.quaternions.qmult(pose[3:], fq))
+                plans = self._plan_chain(arm, [(pre, None), (pose, CONS)], flips=())
+                if plans is None:
+                    continue
+                # the hand rides along with the handle
+                Th = np.eye(4)
+                Th[:3, :3] = t3d.quaternions.quat2mat(pose[3:])
+                Th[:3, 3] = pose[:3]
+                n = int(np.clip(np.ceil(abs(dq_total) / (0.12 if j.type != "prismatic" else 0.025)), 2, 12))
+                way = []
+                for k in range(1, n + 1):
+                    T = self._moved_by(fx, Th, dq_total * k / n)
+                    way.append(list(T[:3, 3]) + list(t3d.quaternions.mat2quat(T[:3, :3])))
+                # as far along as can be planned (at least a third of the way)
+                q_end = self._q_after(arm, plans)
+                for m in range(n, max(1, n // 3) - 1, -1):
+                    moves = self._plan_chain(arm, [(w, None) for w in way[:m]], q0=q_end, flips=())
+                    if moves is not None:
+                        best = (arm, cp, plans, moves, m / n)
+                        break
+                if best is not None:
+                    break
+            if best is not None:
+                break
+        if best is None:
+            return None
+        arm, cp, plans, moves, frac_planned = best
+        home = self._home_plan(arm.opposite)
+        self._sync(arm)
+        self._run([("both", (arm, plans[0], 1.0), (arm.opposite, home, None)) if home is not None else ("move", arm, plans[0]),
+                   ("move", arm, plans[1]), ("grip", arm, 0.0)] + [("move", arm, mv) for mv in moves] + [("grip", arm, 1.0)])
+        ee = self._ee(arm)
+        self._go(arm, [(list(ee[:3] - 0.08 * _hand_x(ee[3:])) + list(ee[3:]), None)])
+        self.last_grasp = dict(contact_point=int(cp), arm=str(arm))
+        q1 = float(fx.get_qpos()[qi])
+        moved = (q1 - q0) / dq_total if abs(dq_total) > 1e-6 else 0.0
+        if os.environ.get("PLAY_DEBUG"):
+            print(f"   OPERATE {fx.get_name()} {arm} cp={cp} {j.type} q {q0:.3f}->{q1:.3f} (target {q0 + dq_total:.3f}, "
+                  f"planned {frac_planned:.2f} of the way) moved {moved:.2f}", flush=True)
+        return self._res(moved > 0.6, lang, arm, moved=float(moved), fixture=fx.get_name())
+
+    def p_open(self, fx):
+        word = FIXTURES[fx.play_name]["word"]
+        if self._fixture_frac(fx) > 0.5:
+            return None
+        hi = (0.5, 0.65) if fx.play_name == "015_laptop" else (0.6, 0.85)   # a lid past vertical can't be pushed shut
+        return self._operate(fx, float(self.prng.uniform(*hi)), f"open the {word}")
+
+    def p_close(self, fx):
+        word = FIXTURES[fx.play_name]["word"]
+        if self._fixture_frac(fx) < 0.3:
+            return None
+        return self._operate(fx, float(self.prng.uniform(0.0, 0.08)), f"close the {word}")
+
+    def p_toggle(self, fx):
+        """Flip the switch with the closed hand, like RoboTwin's turn_switch:
+        press the annotated point; if the rocker doesn't go over, press the
+        other half of it (the point mirrored across the rocker's axis)."""
+        j, qi = self._fixture_joint(fx)
+        lo, hi = fx.get_qlimits()[qi]
+        q0 = float(fx.get_qpos()[qi])
+        p = fx.get_pose().p
+        J = j.get_global_pose().to_transformation_matrix()
+        axis, o = J[:3, 0], J[:3, 3]
+        lang = "turn the switch " + ("off" if q0 > 0.5 * (lo + hi) else "on")
+        for arm in (self._arm_for(p), self._arm_for(p).opposite):
+            pre = self.get_grasp_pose(fx, arm, contact_point_id=0, pre_dis=0.06)
+            pose = self.get_grasp_pose(fx, arm, contact_point_id=0, pre_dis=-0.015)
+            if pre is None or pose is None:
+                continue
+            n = np.cross(axis, _hand_x(pose[3:]))
+            n /= np.linalg.norm(n) + 1e-9
+            mirror = lambda x: list(np.asarray(x[:3]) - 2 * float((np.asarray(x[:3]) - o) @ n) * n) + list(x[3:])
+            pressed = False
+            for P_, Q_ in ((pre, pose), (mirror(pre), mirror(pose))):
+                plans = self._plan_chain(arm, [(P_, None), (Q_, CONS), (P_, CONS)])
+                if plans is None:
+                    continue
+                home = self._home_plan(arm.opposite) if not pressed else None
+                self._sync(arm)
+                self._run(([("both", (arm, None, 0.0), (arm.opposite, home, None))] if home is not None else [("grip", arm, 0.0)]) +
+                          [("move", arm, plans[0]), ("move", arm, plans[1]), ("move", arm, plans[2])])
+                pressed = True
+                if abs(float(fx.get_qpos()[qi]) - q0) > 0.5 * (hi - lo):
+                    break
+            if not pressed:
+                continue
+            self._run([("grip", arm, 1.0)])
+            q1 = float(fx.get_qpos()[qi])
+            if os.environ.get("PLAY_DEBUG"):
+                print(f"   TOGGLE {fx.get_name()} {arm} q {q0:.3f}->{q1:.3f} range {lo:.2f}..{hi:.2f}", flush=True)
+            self.last_grasp = None
+            return self._res(abs(q1 - q0) > 0.5 * (hi - lo), lang, arm)
+        return None
 
     def p_press(self, actor):
         """Press down on top of it with the closed hand (a click)."""
@@ -1339,6 +1587,14 @@ class play_table(Base_Task):
         last = getattr(self, "_last_kind", None)
         opts = []
         nov = lambda a: 1.0 / (1 + touched.get(a.get_name(), 0))
+        for f in getattr(self, "fixtures", []):
+            w = 1.6 * nov(f)            # rarer in the scene, so likelier when there
+            if f.play_name == "056_switch":
+                opts.append((w, "toggle", (f,)))
+            elif self._fixture_frac(f) < 0.5:
+                opts.append((w, "open", (f,)))
+            else:
+                opts.append((w, "close", (f,)))
         for a in objs:
             w = nov(a)
             opts.append((0.7 * w, "move", (a,)))

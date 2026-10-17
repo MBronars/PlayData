@@ -6,9 +6,18 @@ from envs.play_table import play_table, _is_tool
 from envs.utils import UnStableError
 import numpy as np
 args = build_args("play_clean", None, os.environ.get("PLAY_DBG_OUT", "/tmp/robotwin_play_dbg")); args["save_data"] = False
+if os.environ.get("FIXTURE"):
+    args["play"]["p_fixture"] = 1.0
+    args["play"]["fixtures"] = [os.environ["FIXTURE"]]
 seed, skill, n = int(sys.argv[1]), sys.argv[2], int(sys.argv[3]) if len(sys.argv) > 3 else 3
 def make_cands(t):
     objs, conts = t.objects, t.containers
+    if skill in ("open", "close", "toggle"):
+        if skill == "close":   # start it open
+            for f in t.fixtures:
+                j, i = t._fixture_joint(f); lo, hi = f.get_qlimits()[i]; q = f.get_qpos().copy(); q[i] = lo + (0.6 if f.play_name == "015_laptop" else 0.8) * (hi - lo); f.set_qpos(q)
+            for _ in range(50): t.scene.step()
+        return [(f,) for f in t.fixtures]
     if skill in ("move", "push", "reorient", "handover", "press", "shake"):
         return [(a,) for a in objs]
     if skill == "put_in":

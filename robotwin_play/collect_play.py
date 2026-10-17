@@ -11,6 +11,7 @@ import argparse
 import json
 import os
 import queue
+import signal
 import sys
 import time
 import traceback
@@ -67,20 +68,25 @@ def run_episode(ep, opts):
     from envs.utils import UnStableError
     t0 = time.time()
     for k in range(20):
-        # objects that don't settle (a tall thing stood up topples): next sub-seed
+        # objects that don't settle (a tall thing stood up topples), or a scene
+        # where nothing can be planned: next sub-seed
         task = play_table()
         try:
             task.setup_demo(now_ep_num=ep, seed=seed * 31 + k, **args)
-            break
         except UnStableError:
             task.close_env()
+            continue
+        info = task.play_once()
+        task.close_viz()
+        if task.FRAME_IDX > 0:
+            break
+        task.close_env(clear_cache=True)
+    else:
+        raise RuntimeError("no scene with a plannable action in 20 tries")
     seed = seed * 31 + k
-    info = task.play_once()
     task.save_traj_data(ep)
     task.close_env(clear_cache=True)
     segs = info["info"].get("segments", [])
-    if task.FRAME_IDX == 0:
-        raise RuntimeError("nothing was done in this scene (no plannable action)")
     # the released-dataset layout too (same recordings), then RoboTwin's current one
     sys.path.insert(0, HERE)
     from legacy_format import write_legacy
@@ -117,6 +123,14 @@ def main():
     q = ctx.Queue()
     pending = list(range(opts.start, opts.start + opts.episodes))
     procs, done, reported = [], 0, set()
+
+    def stop(signum, frame):   # take the workers down too, or they keep writing into OUT
+        for pr in procs:
+            if pr.is_alive():
+                pr.kill()
+        sys.exit(1)
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGINT, stop)
     log = open(os.path.join(opts.out, "log.jsonl"), "a")
 
     def launch():

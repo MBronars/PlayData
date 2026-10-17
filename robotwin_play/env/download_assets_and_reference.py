@@ -8,7 +8,7 @@ for f in ["embodiments.zip", "objects.zip", "background_texture.zip"]:
     print("assets", f, flush=True)
 REF = "/data/user_data/mbronars/robotwin_ref"
 tasks = ["place_object_basket", "stack_blocks_two", "open_microwave", "put_object_cabinet", "move_can_pot",
-         "place_container_plate", "stack_bowls_two", "lift_pot", "place_a2b_left", "turn_switch"]
+         "place_container_plate", "stack_bowls_two", "lift_pot", "place_a2b_left", "turn_switch", "open_laptop"]
 for emb in ["aloha-agilex_clean_50", "franka_clean_50"]:
     for t in tasks:
         f = f"dataset/{t}/{emb}.zip"
