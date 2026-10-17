@@ -45,6 +45,8 @@ GRASPABLE = [
 CONTAINERS = ["002_bowl", "003_plate", "008_tray", "110_basket", "062_plasticbox", "076_breadbasket"]
 OPEN_TOP = ["002_bowl", "110_basket", "062_plasticbox"]   # can be tipped out
 TOOLS = ["020_hammer", "084_woodenmallet", "100_seal", "058_markpen", "093_brush-pen"]
+SHAKEABLE = ["001_bottle", "114_bottle", "049_shampoo", "101_milk-tea", "105_sauce-can", "109_hydrating-oil",
+             "115_perfume", "080_pillbottle", "071_can", "068_boxdrink"]   # things one shakes (RoboTwin: shake_bottle)
 # flat-topped things something can stand on (as in RoboTwin's block / bowl stacking)
 STACK_BASES = ["023_tissue-box", "112_tea-box", "113_coffee-box", "081_playingcards", "073_rubikscube", "107_soap",
                "077_phone", "079_remotecontrol", "068_boxdrink", "071_can", "105_sauce-can", "101_milk-tea",
@@ -1113,12 +1115,15 @@ class play_table(Base_Task):
             return None
         if not st:
             return self._res(False, lang, arm)
+        # like RoboTwin's shake_bottle, gentler: tip it back and forth about the
+        # hand's side axis (a tilt, not a spin) with a bob, twice, then level it
         ee = self._ee(arm)
-        a = float(self.prng.uniform(0.35, 0.55))
+        a = float(self.prng.uniform(0.3, 0.5))
+        R = t3d.quaternions.quat2mat(ee[3:])
         legs = []
-        for _ in range(3):
-            legs.append((list(ee[:3] + [0, 0, 0.03]) + _rot(ee[3:], [1, 0, 0], a), None))
-            legs.append((list(ee[:3] - [0, 0, 0.03]) + _rot(ee[3:], [1, 0, 0], -a), None))
+        for _ in range(2):
+            legs.append((list(ee[:3] + [0, 0, 0.04]) + list(t3d.quaternions.qmult(t3d.quaternions.axangle2quat(R[:, 1], a), ee[3:])), None))
+            legs.append((list(ee[:3] - [0, 0, 0.02]) + list(t3d.quaternions.qmult(t3d.quaternions.axangle2quat(R[:, 1], -a), ee[3:])), None))
         legs.append((list(ee), None))
         shaken = self._go(arm, legs)
         xy = actor.get_pose().p[:2]
@@ -1341,7 +1346,8 @@ class play_table(Base_Task):
             opts.append((0.35 * w, "reorient", (a,)))
             opts.append((0.6 * w, "handover", (a,)))
             opts.append((0.2 * w, "press", (a,)))
-            opts.append((0.25 * w, "shake", (a,)))
+            if any(a.get_name().startswith(n) for n in SHAKEABLE):
+                opts.append((0.15 * w, "shake", (a,)))
             for c in conts:
                 opts.append((1.0 * w / len(conts), "put_in", (a, c)))
             for b in objs:
