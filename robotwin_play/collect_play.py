@@ -1,6 +1,7 @@
 """Collect RoboTwin play episodes.
 
     python collect_play.py --out OUT --episodes N --workers W --seed S [--config play_clean] [--embodiment aloha-agilex]
+                           [--p_err 0.3] [--err_severity 0.15]
 
 Every episode runs in its own process (plan and record in one pass) and is
 written by RoboTwin's own recorder: OUT/data/episode_XXXXXXX.hdf5 (+ video/,
@@ -40,6 +41,8 @@ def build_args(config, embodiment, out):
         args[f"{side}_embodiment_config"] = yaml.safe_load(open(os.path.join(args[f"{side}_robot_file"], "config.yml")))
     args["embodiment_name"] = "+".join(map(str, emb[:2])) if len(emb) == 3 else str(emb[0])
     args.setdefault("play", {})["embodiment_name"] = args["embodiment_name"]
+    args["play"]["p_err"] = float(getattr(opts_global, "p_err", 0.3))
+    args["play"]["err_severity"] = float(getattr(opts_global, "err_severity", 0.15))
     args["task_name"] = "play_table"
     args["task_config"] = config
     args["save_path"] = out
@@ -49,7 +52,12 @@ def build_args(config, embodiment, out):
     return args
 
 
+opts_global = None
+
+
 def run_episode(ep, opts):
+    global opts_global
+    opts_global = opts
     os.chdir(ROBOTWIN_ROOT)
     sys.path.insert(0, ROBOTWIN_ROOT)
     import numpy as np
@@ -99,6 +107,8 @@ def main():
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--config", default="play_clean")
     p.add_argument("--embodiment", default=None)
+    p.add_argument("--p_err", type=float, default=0.3, help="fraction of actions with an injected near-failure")
+    p.add_argument("--err_severity", type=float, default=0.15, help="fraction of those that are large / combined")
     opts = p.parse_args()
     os.makedirs(opts.out, exist_ok=True)
     os.environ.setdefault("PYTHONHASHSEED", "0")

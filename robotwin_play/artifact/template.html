@@ -38,6 +38,10 @@ section { display: grid; gap: 14px; }
 .chip { font: 500 0.82rem var(--f-mono); padding: 6px 11px; border: 1px solid var(--line); border-radius: 6px;
   background: var(--panel); color: var(--ink-2); cursor: pointer; font-variant-numeric: tabular-nums; }
 .chip:hover { border-color: var(--accent); color: var(--ink); }
+.chip .k { font-size: 0.7rem; letter-spacing: 0.06em; text-transform: uppercase; opacity: 0.8; margin-right: 4px; }
+.chip .k.severe { color: var(--bad); }
+.chip[aria-pressed="true"] .k { color: inherit; }
+.err { font-style: normal; color: var(--bad); }
 .chip[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--panel); }
 .chip:focus-visible, .act:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .player { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); gap: 20px;
@@ -141,10 +145,11 @@ code { font: 0.86em var(--f-mono); }
   <section>
     <h2>Where this stands</h2>
     <ul class="notes">
-      <li><b>Working:</b> random scenes of 3–5 objects from RoboTwin's library (only objects with annotated grasp points) plus often a container; moving things to another spot (7 of 11 succeeded on this page) and turning them around (4 of 6). Every grasp and put-down is checked with the planner before the arm moves, and plans that would take a joint outside the range the expert data uses are rejected.</li>
-      <li><b>Not working yet:</b> stacking succeeds 1 time in 7, handing an object from one hand to the other has not succeeded yet (0 of 3, plus 0 of 3 put-ins that go through a hand-over), and pushes succeed 4 times in 9. A failed attempt still looks like an attempt (the arm goes to the object and comes back), but these are bugs to fix, not intended errors.</li>
-      <li><b>Not ported from LIBERO yet:</b> injected errors, the microwave and cabinet, line-ups and knocks.</li>
-      <li><b>Files:</b> each episode is saved in RoboTwin's current format (<code>data/</code>) and in the format of its released datasets (<code>data_released/</code>), from the same recordings.</li>
+      <li><b>Three sets, 6 episodes each, from the same generator:</b> clean (no injected errors), mixed (30% of actions get a mistake, mostly mild) and high-error (every action gets a severe, usually combined mistake). The chip on each episode says which. Injected mistakes are named on the action in the log.</li>
+      <li><b>Skills:</b> move, put in a container, stack on a flat-topped thing, line up, hand over between the arms, push, turn around, press, shake, tap with a tool, pick two things at once, lift a container with both hands, tip a container out. Clean success is 61% over 28 actions (moves 7/8, presses 3/3, pushes 2/4, put-ins 1/3); high-error success is 21%.</li>
+      <li><b>Planner changes:</b> RoboTwin's planner knew only the table and swept neighbours off it in transit, so the scene objects are now loaded as obstacles before every plan; put-downs descend straight onto the spot; objects that tip in the hand are set down as they are instead of being swung upright. Every plan is checked against the released data's joint range before the arm moves.</li>
+      <li><b>Still weak:</b> thin things (pens, card decks) are grasped but often slip or pivot; taps with a tool register a hit about half the time; some scenes burn most of their attempts on unplannable options (now skipped after the first failure). Articulated objects (microwave, drawer, laptop, switch) are not ported yet.</li>
+      <li><b>Files:</b> each episode is saved in RoboTwin's current format (<code>data/</code>) and in the format of its released datasets (<code>data_released/</code>), from the same recordings; <code>log.jsonl</code> carries the labels and the error type of each action.</li>
     </ul>
   </section>
 </div>
@@ -157,7 +162,7 @@ const FPS = DATA.fps;
 const fmt = (f) => { const s = f / FPS; return `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`; };
 const tot = DATA.episodes.reduce((a, e) => [a[0] + e.segments.length, a[1] + e.segments.filter((s) => s.ok).length, a[2] + e.frames], [0, 0, 0]);
 $("#facts").innerHTML = `<span><b>${DATA.episodes.length}</b> episodes</span><span><b>${tot[0]}</b> actions, <b>${tot[1]}</b> succeeded</span><span><b>${Math.round(tot[2] / FPS / 60)}</b> min of play</span><span><b>4</b> cameras</span>`;
-const kindName = { move: "move", put_in: "put in", stack: "stack", push: "push", reorient: "turn around", handover: "hand over" };
+const kindName = { move: "move", put_in: "put in", stack: "stack", push: "push", reorient: "turn around", handover: "hand over", line_up: "line up", press: "press", shake: "shake", knock_with: "tap with a tool", dual_pick: "pick two at once", lift_together: "lift with both hands", pour: "tip out" };
 let cur = null;
 const vid = $("#vid"), tip = $("#tip");
 function load(i) {
@@ -188,11 +193,12 @@ function load(i) {
   tl.insertBefore(g, $("#cur"));
   $("#acts").innerHTML = cur.segments.map((s, j) => `<button class="act" data-j="${j}">
       <span class="t">${fmt(s.s)}</span>
-      <span class="l">${s.lang}<span class="m">${kindName[s.p] || s.p}${s.via ? " via hand-over" : ""} · ${s.arm.replace("->", " → ")} arm${s.arm.includes("->") ? "s" : ""}</span></span>
+      <span class="l">${s.lang}<span class="m">${kindName[s.p] || s.p}${s.via ? " via hand-over" : ""} · ${s.arm.replace("->", " → ")} arm${s.arm.includes("->") ? "s" : ""}${s.err ? ` · <em class="err">${s.severe ? "severe: " : "injected: "}${s.err.replace(/_/g, " ").replace(/\+/g, " + ")}</em>` : ""}</span></span>
       <span class="pill ${s.ok ? "ok" : "no"}">${s.ok ? "done" : "failed"}</span></button>`).join("");
   document.querySelectorAll(".act").forEach((b) => b.addEventListener("click", () => { vid.currentTime = cur.segments[+b.dataset.j].s / FPS; vid.play().catch(() => {}); }));
 }
-$("#chips").innerHTML = DATA.episodes.map((e, i) => `<button class="chip" aria-pressed="false">${e.objects.slice(0, 2).join(" + ")}${e.objects.length > 2 ? " +" + (e.objects.length - 2) : ""}</button>`).join("");
+const kindTag = { clean: "clean", mixed: "mixed", severe: "high-error" };
+$("#chips").innerHTML = DATA.episodes.map((e, i) => `<button class="chip" aria-pressed="false"><span class="k ${e.kind}">${kindTag[e.kind] || e.kind}</span> ${e.objects.slice(0, 2).join(" + ")}${e.objects.length > 2 ? " +" + (e.objects.length - 2) : ""}</button>`).join("");
 document.querySelectorAll(".chip").forEach((c, i) => c.addEventListener("click", () => load(i)));
 $("#tl").addEventListener("click", (e) => { const r = $("#tl").getBoundingClientRect(); vid.currentTime = (e.clientX - r.left) / r.width * cur.frames / FPS; });
 vid.addEventListener("timeupdate", () => {
@@ -200,7 +206,7 @@ vid.addEventListener("timeupdate", () => {
   $("#cur").style.left = `${Math.min(100, 100 * f / cur.frames)}%`;
   document.querySelectorAll(".act").forEach((b) => { const s = cur.segments[+b.dataset.j]; b.classList.toggle("on", f >= s.s && f < s.e); });
 });
-load(DATA.episodes.findIndex((e) => e.key === "play_v5_4") >= 0 ? DATA.episodes.findIndex((e) => e.key === "play_v5_4") : 0);
+load(0);
 
 // stats table
 const pct = (v) => (100 * v).toFixed(1) + "%";

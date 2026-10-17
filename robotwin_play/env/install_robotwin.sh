@@ -33,4 +33,6 @@ cd $ROOT
 # asset paths in the embodiment configs, then link the play task in
 $PY scripts/update_embodiment_config_path.py
 ln -sf "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/play_table.py" $ROOT/envs/play_table.py
+# planning-only robot configs (needs the assets: run env/download_assets_and_reference.py first)
+[ -d $ROOT/assets/embodiments/aloha-agilex ] && $PY "$(dirname "${BASH_SOURCE[0]}")/make_play_planner_cfg.py"
 echo INSTALL_DONE

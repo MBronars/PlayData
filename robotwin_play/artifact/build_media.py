@@ -3,8 +3,12 @@ left wrist, right wrist) at the recording rate, labels, and stats."""
 import glob, json, os, subprocess, sys
 import cv2, h5py, numpy as np
 OUT = "/data/user_data/mbronars/AgenticExploration/artifact_robotwin"
-RUNS = [("/data/user_data/mbronars/robotwin_runs/play_v5", [0, 1, 2, 3, 4, 5]),
-        ("/data/user_data/mbronars/robotwin_runs/play_v6", [1, 2])]
+# python build_media.py RUN_DIR[:ep,ep,...] ...   (default: every episode of each run)
+RUNS = []
+for a in sys.argv[1:]:
+    run, _, ids = a.partition(":")
+    RUNS.append((run, [int(x) for x in ids.split(",")] if ids else None))
+os.makedirs(f"{OUT}/media", exist_ok=True)
 FPS = 250 / 15   # one recorded frame per 15 sim steps at 250 Hz
 CAMS = ["head_camera", "front_camera", "left_camera", "right_camera"]
 
@@ -28,17 +32,18 @@ def grid_video(h5, mp4):
 eps = []
 for run, ids in RUNS:
     log = {json.loads(l)["ep"]: json.loads(l) for l in open(f"{run}/log.jsonl")}
-    for ep in ids:
+    for ep in (sorted(log) if ids is None else ids):
         r = log.get(ep)
         if r is None or "segments" not in r:
             continue
         key = f"{os.path.basename(run)}_{ep}"
         n, q = grid_video(f"{run}/data_released/episode{ep}.hdf5", f"{OUT}/media/{key}.mp4")
-        eps.append(dict(key=key, run=os.path.basename(run), ep=ep, frames=n,
+        eps.append(dict(key=key, run=os.path.basename(run), ep=ep, frames=n, kind=r.get("kind", os.path.basename(run).split("_")[-1]),
                         objects=[s["name"].split("_", 1)[1].replace("-", " ").replace("_", " ") for s in r["scene"]],
                         containers=[s["name"].split("_", 1)[1].replace("-", " ") for s in r["scene"] if s["container"]],
                         segments=[dict(s=s["start"], e=min(s["end"], n), p=s["primitive"], ok=bool(s["success"]),
-                                       lang=s["language"], arm=s["arm"], via=s.get("via")) for s in r["segments"]],
+                                       lang=s["language"], arm=s["arm"], via=s.get("via"),
+                                       err=(s.get("error") or {}).get("type"), severe=bool((s.get("error") or {}).get("severe"))) for s in r["segments"]],
                         grip=np.round(q[:, [6, 13]], 2)[::2].tolist()))
         print("done", key, n, flush=True)
 
@@ -50,8 +55,7 @@ expert = dict(file="media/expert_place_object_basket.mp4", task="place object ba
 # action-distribution stats (same numbers as checks/actdist.py)
 sys.path.insert(0, "/data/user_data/mbronars/AgenticExploration/robotwin_play/checks")
 import actdist
-play = sorted(glob.glob("/data/user_data/mbronars/robotwin_runs/play_v5/data_released/*.hdf5") +
-              glob.glob("/data/user_data/mbronars/robotwin_runs/play_v6/data_released/*.hdf5"))
+play = sorted(f for run, _ in RUNS for f in glob.glob(f"{run}/data_released/*.hdf5"))
 refs = sorted(glob.glob("/data/user_data/mbronars/robotwin_ref/*/aloha-agilex_clean_50/**/data/*.hdf5", recursive=True))
 P, R = actdist.stats(actdist.load(play)), actdist.stats(actdist.load(refs))
 ARM = actdist.ARM
@@ -75,4 +79,6 @@ stats = dict(
            float(np.mean(np.any(R["dq"] > lim, 1)))]],
     hist=dict(bins=bins.round(3).tolist(), play=hist(P["dq"]), expert=hist(R["dq"])))
 json.dump(dict(episodes=eps, expert=expert, stats=stats, fps=FPS), open(f"{OUT}/data.json", "w"))
-print("ok", len(eps), "episodes")
+tpl = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "template.html")).read()
+open(f"{OUT}/index.html", "w").write(tpl.replace("__DATA__", open(f"{OUT}/data.json").read()))
+print("ok", len(eps), "episodes ->", f"{OUT}/index.html")

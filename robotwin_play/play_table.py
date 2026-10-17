@@ -27,6 +27,11 @@ from .robot import Robot
 from .utils import *
 from .utils.transforms import cal_quat_dis
 
+import importlib.util as _ilu
+_errors = _ilu.spec_from_file_location("rt_errors", os.path.join(os.path.dirname(os.path.realpath(__file__)), "errors.py"))
+errors = _ilu.module_from_spec(_errors)
+_errors.loader.exec_module(errors)
+
 # tabletop objects with annotated grasp points (contact_points_pose)
 GRASPABLE = [
     "001_bottle", "005_french-fries", "006_hamburg", "021_cup", "023_tissue-box", "035_apple", "039_mug",
@@ -64,6 +69,25 @@ def _footprint_radius(name, mid):
     return 0.5 * float(np.hypot(e[0] * sc[0], e[2] * sc[2]))
 
 
+N_OBSTACLES = 16        # cuRobo obstacle cache: the table + up to 15 scene objects
+
+
+def _patch_planner_cache():
+    """RoboTwin builds its cuRobo planners with a world holding only the table.
+    Give them an obstacle cache so the scene objects can be loaded as cuboids
+    before each plan (see _world)."""
+    from .robot import planner as pm
+    cfg = pm.MotionGenConfig
+    if getattr(cfg, "_play_patched", False):
+        return
+    orig = cfg.load_from_robot_config
+    def load(*a, **k):
+        k.setdefault("collision_cache", {"obb": N_OBSTACLES})
+        return orig(*a, **k)
+    cfg.load_from_robot_config = staticmethod(load)
+    cfg._play_patched = True
+
+
 def _rot(q, axis, ang):
     """quaternion q turned by ang about a world axis"""
     return list(t3d.quaternions.qmult(t3d.quaternions.axangle2quat(axis, ang), np.asarray(q, dtype=float)))
@@ -84,6 +108,8 @@ class play_table(Base_Task):
         self.prng = np.random.default_rng(kwags.get("seed", 0) * 7919 + 17)
         self.play_cfg = kwags.get("play", {})
         self.n_plans = 0
+        self.err = None
+        self.action_steps, self.action_len = 0, 2500
         super()._init_task_env_(**kwags)
 
     # ------------------------------------------------------------------ robot
@@ -91,6 +117,7 @@ class play_table(Base_Task):
         """As Base_Task.load_robot, but the planners use the play configs whose
         joint limits are the expert data's range (env/make_play_planner_cfg.py)."""
         self.robot = Robot(self.scene, self.need_topp, **kwags)
+        _patch_planner_cache()
         play = os.path.join(os.path.dirname(self.robot.left_curobo_yml_path), "play_curobo.yml")
         if os.path.exists(os.path.join(ROOT_PATH, play.replace("curobo.yml", "curobo_left.yml"))):
             self.robot.left_curobo_yml_path = self.robot.right_curobo_yml_path = play
@@ -107,7 +134,7 @@ class play_table(Base_Task):
     def _free_xy(self, r, placed, xlim=(-0.24, 0.24), ylim=(-0.16, 0.08), tries=200):
         for _ in range(tries):
             xy = np.array([self.prng.uniform(*xlim), self.prng.uniform(*ylim)])
-            if all(np.linalg.norm(xy - p) > r + q + 0.03 for p, q in placed):
+            if all(np.linalg.norm(xy - p) > r + q + 0.06 for p, q in placed):
                 return xy
         return None
 
@@ -192,23 +219,86 @@ class play_table(Base_Task):
     def _on_table(self, actor):
         return TABLE_Z - 0.05 < actor.get_pose().p[2] < TABLE_Z + 0.3
 
-    def _free_spot(self, actor, side=None, min_move=0.08, r=0.09):
-        """A free table spot (on `side` if given)."""
+    def _clear(self, xy, actor, others, gap=0.03):
+        """No neighbour's box within the actor's own half-diagonal + gap of xy."""
+        lo, hi = self._aabb(actor)
+        need = 0.5 * float(np.linalg.norm((hi - lo)[:2])) + gap
+        xy = np.asarray(xy, dtype=float)
+        for o in others:
+            olo, ohi = self._aabb(o)
+            if np.linalg.norm(np.clip(xy, olo[:2], ohi[:2]) - xy) < need:
+                return False
+        return True
+
+    def _free_spot(self, actor, side=None, min_move=0.08, r=0.09, near=None):
+        """A free table spot (on `side` if given; within near=(xy, radius) if given)."""
         xs = {"left": (-0.25, -0.06), "right": (0.06, 0.25), None: (-0.25, 0.25)}[side]
         p0 = actor.get_pose().p[:2]
-        others = [a for a in self.objects + self.containers if a is not actor]
-        for _ in range(100):
-            xy = np.array([self.prng.uniform(*xs), self.prng.uniform(-0.15, 0.08)])
+        others = [a for a in self.objects + self.containers if a is not actor and self._on_table(a)]
+        for i in range(100):
+            if near is not None:
+                d = near[1] * (0.0 if i == 0 else np.sqrt(self.prng.uniform(0, 1)))
+                a = self.prng.uniform(-np.pi, np.pi)
+                xy = np.asarray(near[0], dtype=float) + d * np.array([np.cos(a), np.sin(a)])
+                if not (-0.28 < xy[0] < 0.28 and -0.2 < xy[1] < 0.1):
+                    continue
+            else:
+                xy = np.array([self.prng.uniform(*xs), self.prng.uniform(-0.15, 0.08)])
             if np.linalg.norm(xy - p0) < min_move:
                 continue
-            if all(np.linalg.norm(xy - o.get_pose().p[:2]) > r for o in others):
+            if self._clear(xy, actor, others):
                 return xy
         return None
 
     # ------------------------------------------------------------- planning
+    def _planner_frame(self, planner, arm, p):
+        """A world point in the planner's base frame (the same transform RoboTwin
+        applies to target poses in CuroboPlanner.plan_path)."""
+        base = planner.robot_origion_pose
+        Rb = t3d.quaternions.quat2mat(np.asarray(base.q, dtype=float)).T
+        rel = Rb @ (np.asarray(p, dtype=float) - np.asarray(base.p)) + np.asarray(planner.frame_bias, dtype=float)
+        R = np.eye(3)
+        if "aloha-agilex" in planner.yml_path:
+            R = t3d.axangles.axangle2mat([0, 0, 1], -0.02 if str(arm) == "left" else -0.01)
+            rel = R @ rel
+        return rel, R @ Rb
+
+    def _world(self, arm, near=None):
+        """Load the scene objects (except the ones this action handles, what is
+        inside those, and neighbours within 15 cm of the plan's target, where
+        the hand has to get close anyway) into the arm's planner as boxes, so
+        paths between actions don't sweep through them. RoboTwin's planners
+        know only the table."""
+        planner = self.robot.left_planner if str(arm) == "left" else self.robot.right_planner
+        if not hasattr(planner, "motion_gen") or os.environ.get("PLAY_NO_OBSTACLES"):
+            return
+        from curobo.geom.types import WorldConfig
+        ign = set(getattr(self, "_ignore", ()))
+        conts = [c for c in ign if c in self.containers]
+        base = planner.robot_origion_pose
+        cub = {"table": {"dims": [0.7, 2, 0.04], "pose": [float(base.p[1]), 0.0, 0.74 - float(base.p[2]), 1, 0, 0, 0.0]}}
+        for a in self.objects + self.containers:
+            if a in ign or not self._on_table(a) or any(self._inside(a, c) for c in conts):
+                continue
+            lo, hi = self._aabb(a)
+            small = max((hi - lo)[:2]) < 0.15 and (hi - lo)[2] < 0.12   # big things stay obstacles even next to the target
+            if near is not None and small and np.linalg.norm(np.clip(np.asarray(near[:2], dtype=float), lo[:2], hi[:2]) - np.asarray(near[:2], dtype=float)) < 0.12:
+                continue
+            p, R = self._planner_frame(planner, arm, 0.5 * (lo + hi))
+            q = t3d.quaternions.mat2quat(R)
+            cub[a.get_name()] = {"dims": [float(x) for x in (hi - lo)], "pose": [float(x) for x in p] + [float(x) for x in q]}
+            if len(cub) >= N_OBSTACLES:
+                break
+        key = json.dumps(cub, sort_keys=True)
+        if getattr(planner, "_play_world_key", None) == key:
+            return
+        planner.motion_gen.update_world(WorldConfig.from_dict({"cuboid": cub}))
+        planner._play_world_key = key
+
     def _plan(self, arm, pose, constraint=None, q=None):
         f = self.robot.left_plan_path if arm == "left" else self.robot.right_plan_path
         self.n_plans += 1
+        self._world(arm, near=pose[:3])
         try:
             return f([float(x) for x in pose], constraint_pose=constraint, last_qpos=q)
         except Exception:
@@ -226,7 +316,7 @@ class play_table(Base_Task):
             q[names.index(n)] = res["position"][-1][k]
         return q
 
-    JOINT_MARGIN = 0.15   # rad beyond the range the expert data uses (same as the planning URDF's limits)
+    JOINT_MARGIN = 0.06   # rad beyond the range the expert data uses (same as the planning URDF's limits)
 
     def _joint_box(self, arm):
         """Per-joint range of RoboTwin's released expert data for this robot
@@ -345,6 +435,33 @@ class play_table(Base_Task):
         else:
             self.right_joint_path, self.right_cnt = list(plans), 0
 
+    def _noisy(self, arm, plan):
+        """Injected shaky hand / jitter: smooth noise added to the joint targets
+        of this plan (kept inside the expert joint range)."""
+        e = getattr(self, "err", None)
+        if not e or not (errors.has(e, "shaky") or errors.has(e, "jitter")):
+            return plan
+        P = np.asarray(plan["position"], dtype=np.float64).copy()
+        n = len(P)
+        if errors.has(e, "shaky"):
+            P[:, :6] += errors.smooth_noise(self.prng, n, e["sigma"], 6)
+        if errors.has(e, "jitter"):
+            t0 = int(e["frac"] * self.action_len) - self.action_steps   # burst placed in the action's own time
+            k = int(e["len"] * 250)
+            a, b = max(0, t0), min(n, max(0, t0) + k)
+            if b > a and t0 < n:
+                P[a:b, :6] += errors.smooth_noise(self.prng, b - a, e["sigma"], 6, cutoff=3.0)
+        box = self._joint_box(arm)
+        if box is not None:
+            P[:, :6] = np.clip(P[:, :6], box[0], box[1])
+        out = dict(plan)
+        out["position"] = P
+        out["velocity"] = np.gradient(P, axis=0) * 250.0
+        return out
+
+    def _count(self, plan):
+        self.action_steps += len(plan["position"])
+
     def _run(self, steps):
         """Execute pre-planned steps through RoboTwin's move() in replay mode.
         steps: ("move", arm, plan) | ("grip", arm, value) |
@@ -353,6 +470,8 @@ class play_table(Base_Task):
             self.plan_success = True
             if st[0] == "move":
                 _, arm, plan = st
+                plan = self._noisy(arm, plan)
+                self._count(plan)
                 self._set_paths(arm, [plan])
                 self.need_plan = False
                 try:
@@ -362,10 +481,20 @@ class play_table(Base_Task):
             elif st[0] == "grip":
                 _, arm, val = st
                 self.move((arm, [Action(arm, "open" if val > 0.5 else "close", target_gripper_pos=float(val))]))
+            elif st[0] == "snatch":
+                _, arm, plan = st
+                plan = self._noisy(arm, plan)
+                self._count(plan)
+                seq = {"left_arm": None, "left_gripper": None, "right_arm": None, "right_gripper": None}
+                seq[f"{arm}_arm"] = plan
+                seq[f"{arm}_gripper"] = self.set_gripper(set_tag=str(arm), **{f"{arm}_pos": 0.0})
+                self.take_dense_action(seq)
             else:
                 acts = []
                 for arm, plan, g in st[1:]:
                     if plan is not None:
+                        plan = self._noisy(arm, plan)
+                        self._count(plan)
                         self._set_paths(arm, [plan])
                         acts.append((arm, [Action(arm, "move", target_pose=[0.0] * 7)]))
                     elif g is not None:
@@ -416,6 +545,10 @@ class play_table(Base_Task):
         the arm's preferred side; or a given orientation), with some randomness
         so the same object is not always grabbed the same way."""
         pref_dir = self.robot.get_grasp_perfect_direction(arm)
+        lo, hi = self._aabb(actor)
+        ext = np.sort((hi - lo)[:2])
+        thin = ext[0] < 0.035 and ext[1] > 0.1      # a pen held by its end pivots in the fingers
+        mid = 0.5 * (lo + hi)
         opts = []
         for i, cp in actor.iter_contact_points("list"):
             if i in exclude:
@@ -429,7 +562,16 @@ class play_table(Base_Task):
                 continue
             pre = np.array(pre, dtype=np.float64)
             pose = pre.copy()
-            pose[:3] += np.array([pre_dis, 0, 0]) @ np.linalg.inv(t3d.quaternions.quat2mat(pre[3:]))
+            R = t3d.quaternions.quat2mat(pre[3:])
+            pose[:3] += np.array([pre_dis, 0, 0]) @ np.linalg.inv(R)
+            e = getattr(self, "err", None)
+            if errors.has(e, "grasp_offset"):      # off-centre, along the finger plane (hand z)
+                pre[:3] += R[:, 2] * e["offset"]
+                pose[:3] += R[:, 2] * e["offset"]
+            if errors.has(e, "grasp_high"):        # fingertips only: stop short along the approach
+                pose[:3] -= R[:, 0] * e["offset"]
+            if errors.has(e, "close_late"):        # overshoot into the object
+                pose[:3] += R[:, 0] * e["overshoot"]
             # the gripper is symmetric: the hand turned 180 deg about its own
             # axis is the same grasp, and often a much easier wrist pose
             flip = t3d.quaternions.axangle2quat([1, 0, 0], np.pi)
@@ -443,15 +585,20 @@ class play_table(Base_Task):
                     score = 0.7 * td + 0.3 * sd
                 if high_first:
                     score -= 6.0 * float(cp[2])
+                if thin:
+                    score += 4.0 * float(np.linalg.norm(np.asarray(cp[:2]) - mid[:2]))
                 opts.append((score + self.prng.normal(0, 0.08), i, pre_, pose_))
         opts.sort(key=lambda x: x[0])
+        if errors.has(getattr(self, "err", None), "unstable_grasp") and len(opts) > 1:
+            opts = opts[len(opts) // 2:] + opts[:len(opts) // 2]   # one of the worse-ranked ones first
         return opts[:k]
 
     def _then_pose(self, grasp_pose, actor, then):
-        """The hand pose (grasp orientation kept) that holds the object's origin
-        at `then`, 5 cm up: used to check that a put-down there is reachable."""
+        """The hand poses (grasp orientation kept) that hold the object's origin
+        over `then` at the carry-over and the pre-place height: used to check
+        that a put-down there is reachable before the object is picked up."""
         off = np.asarray(grasp_pose[:3]) - actor.get_pose().p
-        return list(np.asarray(then, dtype=float) + off + [0, 0, 0.05]) + list(grasp_pose[3:])
+        return [list(np.asarray(then, dtype=float) + off + [0, 0, dz]) + list(grasp_pose[3:]) for dz in (0.19, 0.11)]
 
     def _pick(self, actor, arm, lift=0.1, then=None, arms=None, exclude=(), avoid=None, pref=None, home_other=True,
               below=None, high_first=False):
@@ -460,6 +607,15 @@ class play_table(Base_Task):
         Tries this arm, then the other. Returns (held, arm), or (None, arm) if
         nothing could be planned (nothing moved)."""
         z0 = actor.get_pose().p[2]
+        actor._play_q0 = np.array(actor.get_pose().q, dtype=float)
+        ign0 = set(getattr(self, "_ignore", ()))
+        self._ignore = {actor}
+        try:
+            return self._pick1(actor, arm, lift, then, arms, exclude, avoid, pref, home_other, below, high_first, z0)
+        finally:
+            self._ignore = ign0
+
+    def _pick1(self, actor, arm, lift, then, arms, exclude, avoid, pref, home_other, below, high_first, z0):
         for arm_ in (arms or (arm, arm.opposite)):
             for _, cid, pre, pose in self._grasp_options(actor, arm_, exclude=exclude, avoid=avoid, pref=pref,
                                                           below=below, high_first=high_first):
@@ -471,14 +627,26 @@ class play_table(Base_Task):
                 plans = self._plan_chain(arm_, legs, flips=())   # (the options already include the flipped hand)
                 if plans is None:
                     continue
-                if then is not None and self._plan_about(arm_, [(self._then_pose(pose, actor, then), None)], then,
+                if then is not None and self._plan_about(arm_, [(p_, None) for p_ in self._then_pose(pose, actor, then)], then,
                                                          q0=self._q_after(arm_, plans)) is None:
                     continue
                 home = self._home_plan(arm_.opposite) if home_other else None
                 self._sync(arm_)
-                steps = [("both", (arm_, plans[0], None), (arm_.opposite, home, None)) if home is not None else ("move", arm_, plans[0]),
-                         ("move", arm_, plans[1]), ("grip", arm_, 0.0)]
-                if lift > 0:
+                e = getattr(self, "err", None)
+                first = ("both", (arm_, plans[0], None), (arm_.opposite, home, None)) if home is not None else ("move", arm_, plans[0])
+                if errors.has(e, "close_early"):
+                    # the fingers shut `early` before the grasp point, and the hand pushes on with them shut
+                    P1 = np.asarray(plans[1]["position"])
+                    k = max(1, len(P1) - int(e["early"] / 0.1 * len(P1)))   # approach leg is pre_dis = 0.1 long
+                    a_, b_ = dict(plans[1]), dict(plans[1])
+                    a_["position"], a_["velocity"] = P1[:k], np.asarray(plans[1]["velocity"])[:k]
+                    b_["position"], b_["velocity"] = P1[k - 1:], np.asarray(plans[1]["velocity"])[k - 1:]
+                    steps = [first, ("move", arm_, a_), ("grip", arm_, 0.0), ("move", arm_, b_)]
+                elif errors.has(e, "lift_early") and lift > 0:
+                    steps = [first, ("move", arm_, plans[1]), ("snatch", arm_, plans[2])]
+                else:
+                    steps = [first, ("move", arm_, plans[1]), ("grip", arm_, 0.0)]
+                if lift > 0 and not errors.has(e, "lift_early"):
                     steps.append(("move", arm_, plans[2]))
                 self._run(steps)
                 self.last_grasp = dict(contact_point=int(cid), arm=str(arm_))
@@ -495,13 +663,38 @@ class play_table(Base_Task):
         planned; returns True if it was executed."""
         target = list(target) + [1, 0, 0, 0] if len(target) == 3 else list(target)
         kw.setdefault("constrain", "free")
+        if self._tilt(actor) > 0.45:
+            self._why = "tilted in the hand"   # re-uprighting it would swing the arm across the table
+            return False
+        e = getattr(self, "err", None)
+        if errors.has(e, "knock_over"):
+            kn = self._knock_spot(actor, target[:3], e["overlap"])
+            if kn is not None:
+                target = list(kn) + target[3:]
+                e["hit"] = self._knock_m
+        if errors.has(e, "place_offset"):
+            target[0] += e["offset_xy"][0]
+            target[1] += e["offset_xy"][1]
+        if errors.has(e, "drop_high"):
+            dis = dis + e["drop"]
+        # pre-place point straight above the spot whatever the grasp direction (RoboTwin's "fp"
+        # axis assumes a functional-point frame whose z points down; ours are position-only)
+        kw.setdefault("pre_dis_axis", [0.0, 0.0, -1.0])
         pre = self.get_place_pose(actor, arm, target, pre_dis=pre_dis, **kw)
         pose = self.get_place_pose(actor, arm, target, pre_dis=dis, **kw)
-        legs = [(pre, None), (pose, None)]
+        # carry over at the lifted height, then come down onto the spot (the
+        # planner knows nothing but the table: a diagonal path cuts through walls)
+        over = list(pre)
+        over[2] = max(float(pre[2]), min(float(self._ee(arm)[2]), float(pre[2]) + 0.08))
+        legs = [(over, None), (pre, None), (pose, CONS)]
+        if errors.has(e, "carry_hit"):
+            hit = self._carry_hit_pose(actor, arm, target[:3])
+            if hit is not None:
+                legs = [(hit, None)] + legs[1:]
         if up:
             upp = list(pose)
             upp[2] += up
-            legs.append((upp, None))
+            legs.append((upp, CONS))
         plans = self._plan_about(arm, legs, target[:3], angs=(0.0, np.pi) if kw["constrain"] == "align" else (0.0, np.pi, np.pi / 2, -np.pi / 2))
         if os.environ.get("PLAY_DEBUG"):
             print(f"   PLACE {actor.get_name()} {arm} target={np.round(target[:3], 3)} pre={np.round(pre[:3], 3)} pose={np.round(pose[:3], 3)} "
@@ -509,21 +702,102 @@ class play_table(Base_Task):
         if plans is None:
             return False
         self._sync(arm)
-        steps = [("move", arm, plans[0]), ("move", arm, plans[1])]
+        steps = [("move", arm, p) for p in plans[:len(legs) - (1 if up else 0)]]
+        if errors.has(e, "release_early") and release:
+            # the hand opens part-way through the carry and carries on with it open
+            P0 = np.asarray(plans[0]["position"])
+            k = max(2, int(e["frac"] * len(P0)))
+            a_, b_ = dict(plans[0]), dict(plans[0])
+            a_["position"], a_["velocity"] = P0[:k], np.asarray(plans[0]["velocity"])[:k]
+            b_["position"], b_["velocity"] = P0[k - 1:], np.asarray(plans[0]["velocity"])[k - 1:]
+            steps = [("move", arm, a_), ("grip", arm, 1.0), ("move", arm, b_)] + steps[1:]
+            release = False
         if release:
             steps.append(("grip", arm, 1.0))
         if up:
-            steps.append(("move", arm, plans[2]))
+            steps.append(("move", arm, plans[-1]))
         ok = self._run(steps)
         if os.environ.get("PLAY_DEBUG"):
             print(f"   PLACED {actor.get_name()} now at {np.round(actor.get_pose().p, 3)} (target {np.round(target[:3], 3)}) ran={ok}", flush=True)
         return ok
 
+    def _knock_spot(self, actor, target, overlap):
+        """Injected error: a set-down spot half on top of a standing neighbour
+        near the target, so something topples."""
+        best = None
+        for m in self.objects + self.containers:
+            if m is actor or not self._on_table(m):
+                continue
+            pm = m.get_pose().p
+            d = np.linalg.norm(pm[:2] - np.asarray(target[:2]))
+            if d < 0.3 and (best is None or d < best[0]):
+                best = (d, m)
+        if best is None:
+            return None
+        m = best[1]
+        lo, hi = self._aabb(m)
+        alo, ahi = self._aabb(actor)
+        u = np.asarray(target[:2]) - m.get_pose().p[:2]
+        u = u / np.linalg.norm(u) if np.linalg.norm(u) > 1e-6 else np.array([1.0, 0.0])
+        r = 0.5 * float(np.abs((hi - lo)[:2]) @ np.abs(u)) + 0.5 * float(np.abs((ahi - alo)[:2]) @ np.abs(u)) - overlap
+        xy = m.get_pose().p[:2] + u * max(r, 0.01)
+        self._knock_m = m.get_name()
+        self._ignore = set(getattr(self, "_ignore", ())) | {m}
+        return [float(xy[0]), float(xy[1]), float(hi[2]) + 0.01]
+
+    def _carry_hit_pose(self, actor, arm, target):
+        """Injected error: a hand pose on the way that swings the held object
+        through a standing neighbour."""
+        p0 = actor.get_pose().p
+        best = None
+        for m in self.objects + self.containers:
+            if m is actor or not self._on_table(m):
+                continue
+            pm = m.get_pose().p
+            d = np.asarray(target[:2]) - p0[:2]
+            s_ = float(np.clip((pm[:2] - p0[:2]) @ d / max(d @ d, 1e-9), 0.05, 0.95))
+            off = np.linalg.norm(p0[:2] + s_ * d - pm[:2])
+            if off < 0.2 and (best is None or off < best[0]):
+                best = (off, m)
+        if best is None:
+            return None
+        m = best[1]
+        self._ignore = set(getattr(self, "_ignore", ())) | {m}
+        lo, hi = self._aabb(m)
+        alo, _ = self._aabb(actor)
+        ee = self._ee(arm)
+        # held object's bottom passes 2 cm below the neighbour's top, right over it
+        z = hi[2] - 0.02 + (ee[2] - alo[2])
+        self.err["hit_carry"] = m.get_name()
+        return [float(m.get_pose().p[0]), float(m.get_pose().p[1]), float(z)] + list(ee[3:])
+
+    def _tilt(self, actor):
+        """How far the object has tipped since it was last grasped (the world's
+        up axis seen from the object's frame then and now; yaw doesn't count)."""
+        q0 = getattr(actor, "_play_q0", None)
+        if q0 is None:
+            return 0.0
+        u0 = t3d.quaternions.quat2mat(np.asarray(q0, dtype=float)).T @ [0, 0, 1]
+        u1 = t3d.quaternions.quat2mat(np.asarray(actor.get_pose().q, dtype=float)).T @ [0, 0, 1]
+        return float(np.arccos(np.clip(u0 @ u1, -1, 1)))
+
     def _put_down_here(self, actor, arm):
         """Couldn't plan the put-down: set it down right where the hand is."""
         p = actor.get_pose().p
-        if not self._place(actor, arm, [p[0], p[1], TABLE_Z], 0.03, 0.005):
+        if self._tilt(actor) < 0.45 and self._place(actor, arm, [p[0], p[1], TABLE_Z], 0.03, 0.005):
+            return
+        # tilted in the hand (or no plan): lower it straight down as it is and let go
+        ee = self._ee(arm)
+        drop = float(self._aabb(actor)[0][2] - TABLE_Z - 0.003)
+        down = [ee[0], ee[1], ee[2] - max(drop, 0.0)] + list(ee[3:])
+        plans = self._plan_chain(arm, [(down, CONS)]) if drop > 0.01 else []
+        if plans is None:
             self._run([("grip", arm, 1.0)])   # at least let go of it
+            return
+        self._sync(arm)
+        self._run([("move", arm, pl) for pl in plans] + [("grip", arm, 1.0)])
+        up = [ee[0], ee[1], ee[2] - max(drop, 0.0) + 0.07] + list(ee[3:])
+        self._go(arm, [(up, None)])
 
     # ------------------------------------------------------------- results
     def _res(self, ok, lang, arm, **extra):
@@ -570,17 +844,22 @@ class play_table(Base_Task):
         if not st:
             return self._res(False, lang, arm)
         placed = self._place(actor, arm, [xy[0], xy[1], TABLE_Z], 0.05, 0.01)
+        if not placed:
+            xy2 = self._free_spot(actor, side=str(arm))    # changes its mind: a spot on its own side
+            if xy2 is not None:
+                xy = xy2
+                placed = self._place(actor, arm, [xy[0], xy[1], TABLE_Z], 0.05, 0.01)
         ok = placed and np.linalg.norm(actor.get_pose().p[:2] - xy) < 0.05
         return self._finish(actor, arm, placed, ok, lang)
 
     def p_put_in(self, actor, cont):
         lang = f"put the {self._name(actor)} in the {self._name(cont)}"
-        fp = cont.get_functional_point(0)
-        st, arm = self._start(actor, lang, lift=0.12, then=fp[:3])
+        fp = list(cont.get_functional_point(0)[:3])   # position only: the point's own frame may point down
+        st, arm = self._start(actor, lang, lift=max(0.12, float(self._aabb(cont)[1][2]) - TABLE_Z + 0.06), then=fp[:3])
         if st is None:
             # no arm can both pick it up and reach the container: pass it over
             if self._arm_for(actor.get_pose().p) != self._arm_for(fp):
-                res = self.p_handover(actor, dest=fp)
+                res = self.p_handover(actor, dest=fp + [1, 0, 0, 0])
                 if res is not None:
                     res.update(language=f"pass the {self._name(actor)} over and put it in the {self._name(cont)}",
                                success=bool(res["success"] and self._inside(actor, cont)), via="handover")
@@ -588,7 +867,9 @@ class play_table(Base_Task):
             return None
         if not st:
             return self._res(False, lang, arm)
-        placed = self._place(actor, arm, fp, 0.08, 0.03)
+        fp = list(cont.get_functional_point(0)[:3])   # re-read: the pick may have nudged it
+        rim = float(self._aabb(cont)[1][2])
+        placed = self._place(actor, arm, fp, max(0.08, rim - fp[2] + 0.05), 0.03)
         return self._finish(actor, arm, placed, self._inside(actor, cont), lang)
 
     def p_stack(self, actor, base):
@@ -603,6 +884,7 @@ class play_table(Base_Task):
             return None
         if not st:
             return self._res(False, lang, arm)
+        bp, (lo, hi) = base.get_pose().p, self._aabb(base)   # re-read: the pick may have nudged it
         placed = self._place(actor, arm, [bp[0], bp[1], hi[2] + 0.005], 0.06, 0.015)
         p = actor.get_pose().p
         alo2, _ = self._aabb(actor)
@@ -629,7 +911,7 @@ class play_table(Base_Task):
             xy = ap[:2] + u * d
             if not (-0.28 < xy[0] < 0.28 and -0.2 < xy[1] < 0.1):
                 continue
-            if any(np.linalg.norm(xy - o.get_pose().p[:2]) < 0.08 for o in others):
+            if not self._clear(xy, actor, [o for o in others if self._on_table(o)]):
                 continue
             cands.append(xy)
         if not cands:
@@ -668,7 +950,9 @@ class play_table(Base_Task):
         # to the middle, still upright, the hand at a comfortable height
         ee = self._ee(a1)
         went = False
+        hang = float(ee[2] - self._aabb(actor)[0][2])   # how far the object reaches below the hand
         for hz in (0.95, 0.99, 0.91):
+            hz = max(hz, TABLE_Z + 0.05 + hang)            # its bottom stays clear of the table
             hand_mid = [0.0, float(self.prng.uniform(-0.08, -0.02)), hz] + list(ee[3:])
             if self._go(a1, [(hand_mid, None)]):
                 went = True
@@ -684,8 +968,14 @@ class play_table(Base_Task):
             print(f"   HANDOVER mid reached, {a1} holds={held1}, object at {np.round(actor.get_pose().p, 3)} fingers {np.round(self._finger_xyz(a1), 3)} contact z {cps}", flush=True)
         # the other hand comes in from its side, horizontally
         pref = GRASP_DIRECTION_DIC["right" if a2 == "left" else "left"]
+        if errors.has(getattr(self, "err", None), "handover_miss"):
+            # the receiving hand closes early, beside the object, and the first hand lets go anyway
+            self.err["early"] = 0.06
+            self.err["parts"] = list(self.err["parts"]) + ["close_early"]
         ok2, _ = self._pick(actor, a2, lift=0.0, arms=(a2,), exclude=(g1["contact_point"],), avoid=self._finger_xyz(a1),
                             pref=pref, home_other=False, below=float(self._finger_xyz(a1)[2]) - 0.04)
+        if errors.has(getattr(self, "err", None), "handover_miss") and ok2 is not None:
+            self._run([("grip", a1, 1.0)])   # ... lets go regardless of whether the other hand has it
         g2 = self.last_grasp
         if os.environ.get("PLAY_DEBUG"):
             print(f"   HANDOVER second grasp ok2={ok2} holds2={self._holds(a2, actor)} g2={g2} why={getattr(self, '_why', '')}", flush=True)
@@ -714,7 +1004,7 @@ class play_table(Base_Task):
         self._run([("both", (a2, p2[0] if p2 else None, None), (a1, hp, None))])
         target = dest
         if target is None:
-            xy = self._free_spot(actor, side=str(a2))
+            xy = self._free_spot(actor, min_move=0.0, near=(actor.get_pose().p[:2], 0.1))
             target = None if xy is None else [xy[0], xy[1], TABLE_Z]
         placed = False
         if target is not None:
@@ -728,21 +1018,25 @@ class play_table(Base_Task):
         p = actor.get_pose().p
         lo, hi = self._aabb(actor)
         h = hi[2] - lo[2]
-        r = 0.5 * np.linalg.norm((hi - lo)[:2])
         arm = self._arm_for(p)
         q = TOPDOWN[str(arm)]
         others = [o for o in self.objects + self.containers if o is not actor]
         for _ in range(8):
             ang = self.prng.uniform(-np.pi, np.pi)
             d = np.array([np.cos(ang), np.sin(ang)])
+            r = 0.5 * float(np.abs((hi - lo)[:2]) @ np.abs(d))   # its half-extent along the push
             dist = self.prng.uniform(0.06, 0.12)
             end = p[:2] + d * dist
             if not (-0.28 < end[0] < 0.28 and -0.2 < end[1] < 0.1):
                 continue
+            if np.linalg.norm(end - [0, -0.04]) > np.linalg.norm(p[:2] - [0, -0.04]) + 0.02:
+                continue   # towards the middle: a can that rolls on shouldn't roll off the table
             if any(np.linalg.norm(end - o.get_pose().p[:2]) < 0.08 for o in others):
                 continue
-            z = lo[2] + np.clip(0.5 * h, 0.015, 0.05) + TIP   # fingertips at that height on the object
+            z = lo[2] + np.clip(0.5 * h, 0.01, 0.05) + TIP    # fingertips at that height on the object
             start = p[:2] - d * (r + 0.04)
+            if errors.has(getattr(self, "err", None), "push_offset"):
+                start = start + np.array([-d[1], d[0]]) * self.err["offset"]
             above = [start[0], start[1], z + 0.08] + list(q)
             down = [start[0], start[1], z] + list(q)
             through = [end[0] - d[0] * r, end[1] - d[1] * r, z] + list(q)
@@ -758,6 +1052,8 @@ class play_table(Base_Task):
                        ("grip", arm, 1.0)])
             moved = float(np.linalg.norm(actor.get_pose().p[:2] - p[:2]))
             self.last_grasp = None
+            if os.environ.get("PLAY_DEBUG"):
+                print(f"   PUSH {actor.get_name()} {arm} dist={dist:.3f} r={r:.3f} z={z - TIP - lo[2]:.3f} moved={moved:.3f} now={np.round(actor.get_pose().p, 3)} tilt={self._tilt(actor):.2f}", flush=True)
             return self._res(moved > 0.5 * dist, lang, arm, moved=moved)
         return None
 
@@ -786,6 +1082,12 @@ class play_table(Base_Task):
         """Press down on top of it with the closed hand (a click)."""
         lo, hi = self._aabb(actor)
         c = 0.5 * (lo + hi)
+        if errors.has(getattr(self, "err", None), "press_miss"):
+            # comes down beside it: the offset is measured from the object's edge, so the hand misses it
+            d = np.asarray(self.err["offset_xy"], dtype=float)
+            u = d / (np.linalg.norm(d) + 1e-9)
+            c = c + np.r_[u * (0.5 * float(np.abs((hi - lo)[:2]) @ np.abs(u)) + np.linalg.norm(d)), 0.0]
+            hi = np.r_[hi[:2], TABLE_Z + 0.01]
         arm = self._arm_for(c)
         q = TOPDOWN[str(arm)]
         top = hi[2]
@@ -828,7 +1130,10 @@ class play_table(Base_Task):
         stamp on a card)."""
         lang = f"tap the {self._name(target)} with the {self._name(tool)}"
         tlo, thi = self._aabb(target)
-        tp = target.get_pose().p
+        tp = target.get_pose().p.copy()
+        if errors.has(getattr(self, "err", None), "tap_miss"):
+            tp[:2] += self.err["offset_xy"]
+            thi = np.r_[thi[:2], TABLE_Z]   # beside it: down to the table
         bottom = float(self._aabb(tool)[0][2] - tool.get_pose().p[2])   # tool origin vs its lowest point
         over = [tp[0], tp[1], thi[2] + 0.03 - bottom]
         st, arm = self._start(tool, lang, lift=0.1, then=over)
@@ -880,7 +1185,7 @@ class play_table(Base_Task):
                 up = pose.copy()
                 up[2] += 0.1
                 plans = self._plan_chain(arm, [(pre, None), (pose, CONS), (up, None)], flips=())
-                if plans is not None and self._plan_about(arm, [(self._then_pose(pose, obj, [xy[0], xy[1], TABLE_Z]), None)],
+                if plans is not None and self._plan_about(arm, [(p_, None) for p_ in self._then_pose(pose, obj, [xy[0], xy[1], TABLE_Z])],
                                                           [xy[0], xy[1], TABLE_Z], q0=self._q_after(arm, plans)) is None:
                     plans = None
                 if plans is not None:
@@ -1031,38 +1336,40 @@ class play_table(Base_Task):
         nov = lambda a: 1.0 / (1 + touched.get(a.get_name(), 0))
         for a in objs:
             w = nov(a)
-            opts.append((0.8 * w, "move", (a,)))
-            opts.append((0.45 * w, "push", (a,)))
-            opts.append((0.4 * w, "reorient", (a,)))
-            opts.append((0.4 * w, "handover", (a,)))
-            opts.append((0.35 * w, "press", (a,)))
-            opts.append((0.3 * w, "shake", (a,)))
+            opts.append((0.7 * w, "move", (a,)))
+            opts.append((0.4 * w, "push", (a,)))
+            opts.append((0.35 * w, "reorient", (a,)))
+            opts.append((0.6 * w, "handover", (a,)))
+            opts.append((0.2 * w, "press", (a,)))
+            opts.append((0.25 * w, "shake", (a,)))
             for c in conts:
                 opts.append((1.0 * w / len(conts), "put_in", (a, c)))
             for b in objs:
                 if b is not a:
-                    opts.append((0.35 * w / max(len(objs) - 1, 1), "stack", (a, b)))
-                    opts.append((0.3 * w / max(len(objs) - 1, 1), "line_up", (a, b)))
+                    opts.append((0.6 * w / max(len(objs) - 1, 1), "stack", (a, b)))
+                    opts.append((0.35 * w / max(len(objs) - 1, 1), "line_up", (a, b)))
                     if _is_tool(a):
                         opts.append((0.9 * w / max(len(objs) - 1, 1), "knock_with", (a, b)))
             for c in conts:
                 if any(c.get_name().startswith(n) for n in STACK_BASES):
                     opts.append((0.25 * w / len(conts), "stack", (a, c)))
                     if a.get_pose().p[0] < 0 < b.get_pose().p[0]:
-                        opts.append((0.5 / max(len(objs) - 1, 1), "dual_pick", (a, b)))
+                        opts.append((0.8 / max(len(objs) - 1, 1), "dual_pick", (a, b)))
         for c in conts:
-            opts.append((0.35, "lift_together", (c,)))
+            opts.append((0.6, "lift_together", (c,)))
             if any(c.get_name().startswith(n) for n in OPEN_TOP) and any(self._inside(o, c) for o in objs):
                 opts.append((1.0, "pour", (c,)))
         # variety: what has been done already is less likely, the same kind twice in a row even less
-        opts = [(w / (1 + done.get(k, 0)) * (0.3 if k == last else 1.0), k, x) for w, k, x in opts]
+        skip = getattr(self, "_skip", set())    # couldn't be planned earlier in this episode
+        opts = [(w / (1 + done.get(k, 0)) * (0.3 if k == last else 1.0), k, x) for w, k, x in opts
+                if (k, tuple(a.get_name() for a in x)) not in skip]
         w = np.array([o[0] for o in opts])
         return opts[int(self.prng.choice(len(opts), p=w / w.sum()))] if opts else None
 
     def play_once(self):
         cfg = self.play_cfg
         segs = []
-        self._done, self._touched = {}, {}
+        self._done, self._touched, self._skip = {}, {}, set()
         tries = 0
         while len(segs) < cfg.get("max_actions", 10) and tries < cfg.get("max_tries", 40):
             tries += 1
@@ -1074,11 +1381,27 @@ class play_table(Base_Task):
             _, kind, args = ch
             f0 = self.FRAME_IDX
             self.plan_success = True
+            self.err = errors.sample_error(self.prng, kind, p_err=cfg.get("p_err", 0.3), severity=cfg.get("err_severity", 0.15))
+            self.action_steps, self.action_len = 0, 2500
+            err0 = self.err
+            self._ignore = set(args)
             res = getattr(self, "p_" + kind)(*args)
             self.plan_success = True
             self._last_kind = kind
+            if res is not None and err0 is not None and not res["success"] and kind in errors.PICK and self.prng.random() < 0.5:
+                # after an injected failure: one clean try more (or move on)
+                self.err = None
+                res2 = getattr(self, "p_" + kind)(*args)
+                self.plan_success = True
+                if res2 is not None:
+                    res2["retry_after_error"] = True
+                    res = dict(res2, language=res["language"])
+            self.err = None
             if res is None:
+                self._skip = getattr(self, "_skip", set()) | {(kind, tuple(a.get_name() for a in args))}
                 continue
+            if err0 is not None:
+                res["error"] = err0
             self._done[kind] = self._done.get(kind, 0) + 1
             for a in args:
                 self._touched[a.get_name()] = self._touched.get(a.get_name(), 0) + 1
