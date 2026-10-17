@@ -80,7 +80,7 @@ def run_episode(ep, opts):
     task.merge_pkl_to_hdf5_video(instructions=[s.get("language", "") for s in segs] or ["play"])
     task.remove_data_cache()
     return dict(ep=ep, seed=seed, frames=int(task.FRAME_IDX), scene=info["info"].get("scene"), segments=segs,
-                plan_failures=info["info"].get("plan_failures", 0), seconds=round(time.time() - t0, 1))
+                plans=info["info"].get("plans"), syncs=info["info"].get("syncs"), seconds=round(time.time() - t0, 1))
 
 
 def worker(ep, opts, q):
