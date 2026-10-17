@@ -15,15 +15,16 @@ CAMS = ["head_camera", "front_camera", "left_camera", "right_camera"]
 def dec(b):
     return cv2.imdecode(np.frombuffer(b, np.uint8), cv2.IMREAD_COLOR)  # legacy RGB bytes -> RGB array
 
-def grid_video(h5, mp4):
+def grid_video(h5, mp4, cams=CAMS):
     with h5py.File(h5) as f:
         n = len(f["joint_action/vector"])
-        p = subprocess.Popen(["ffmpeg", "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", "640x480",
+        size = "640x480" if len(cams) == 4 else "320x240"
+        p = subprocess.Popen(["ffmpeg", "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", size,
                               "-r", f"{FPS:.4f}", "-i", "-", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "28",
                               "-preset", "slow", "-movflags", "+faststart", mp4], stdin=subprocess.PIPE)
         for t in range(n):
-            ims = [dec(f[f"observation/{c}/rgb"][t]) for c in CAMS]
-            fr = np.concatenate([np.concatenate(ims[:2], 1), np.concatenate(ims[2:], 1)], 0)
+            ims = [dec(f[f"observation/{c}/rgb"][t]) for c in cams]
+            fr = ims[0] if len(cams) == 1 else np.concatenate([np.concatenate(ims[:2], 1), np.concatenate(ims[2:], 1)], 0)
             p.stdin.write(np.ascontiguousarray(fr).tobytes())
         p.stdin.close(); p.wait()
         q = f["joint_action/vector"][:]
@@ -57,7 +58,7 @@ for run, ids in RUNS:
 
 # one released expert episode for comparison
 ref = "/data/user_data/mbronars/robotwin_ref/place_object_basket/aloha-agilex_clean_50/aloha-agilex_clean_50/data/episode0.hdf5"
-n, _ = grid_video(ref, f"{OUT}/media/expert_place_object_basket.mp4")
+n, _ = grid_video(ref, f"{OUT}/media/expert_place_object_basket.mp4", cams=["head_camera"])
 expert = dict(file="media/expert_place_object_basket.mp4", task="place object basket (released expert demo, episode 0)", frames=n)
 
 # action-distribution stats (same numbers as checks/actdist.py)

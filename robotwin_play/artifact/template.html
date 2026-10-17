@@ -144,11 +144,12 @@ code { font: 0.86em var(--f-mono); }
   <section>
     <h2>Where this stands</h2>
     <ul class="notes">
-      <li><b>Three sets, 6 episodes each, from the same generator:</b> clean (no injected errors), mixed (30% of actions get a mistake, mostly mild) and high-error (every action gets a severe, usually combined mistake). The chip on each episode says which. Injected mistakes are named on the action in the log.</li>
-      <li><b>Skills:</b> move, put in a container, stack on a flat-topped thing, line up, hand over between the arms, push, turn around, press, shake, tap with a tool, pick two things at once, lift a container with both hands, tip a container out. Clean success is 61% over 28 actions (moves 7/8, presses 3/3, pushes 2/4, put-ins 1/3); high-error success is 21%.</li>
-      <li><b>Planner changes:</b> RoboTwin's planner knew only the table and swept neighbours off it in transit, so the scene objects are now loaded as obstacles before every plan; put-downs descend straight onto the spot; objects that tip in the hand are set down as they are instead of being swung upright. Every plan is checked against the released data's joint range before the arm moves.</li>
-      <li><b>Still weak:</b> thin things (pens, card decks) are grasped but often slip or pivot; taps with a tool register a hit about half the time; some scenes burn most of their attempts on unplannable options (now skipped after the first failure). Articulated objects (microwave, drawer, laptop, switch) are not ported yet.</li>
-      <li><b>Files:</b> each episode is saved in RoboTwin's current format (<code>data/</code>) and in the format of its released datasets (<code>data_released/</code>), from the same recordings; <code>log.jsonl</code> carries the labels and the error type of each action.</li>
+      <li><b>Two sets:</b> 8 clean episodes (no injected mistakes) and 6 high-error ones (every action gets a severe, usually combined mistake). The chip on each episode says which; injected mistakes are named on the action.</li>
+      <li><b>New: opening and closing things.</b> About half the scenes include one of RoboTwin's articulated fixtures, placed as in their own tasks: a microwave, a cabinet drawer, a laptop or a switch. The hand grasps the handle and follows the door's arc or the drawer's slide; the switch is pressed on one half, then the other if it doesn't flip. In these batches: microwave opened and closed, drawer opened 3 of 4 times, laptop lid opened and closed. In single-skill tests the switch flipped on 4/4 and off 5/5.</li>
+      <li><b>Clean success:</b> 67% of 46 actions (presses 5/5, opens 3/3, closes 2/2, turn-arounds 5/7, moves 6/10, pushes 6/10). High-error: 32%.</li>
+      <li><b>The video:</b> the robot's own head-camera viewpoint with a wider lens so both arms and the whole table stay in frame. It is for viewing only; the dataset keeps RoboTwin's cameras (head, front, two wrists) unchanged. The expert demo below is RoboTwin's head camera as recorded.</li>
+      <li><b>Still weak:</b> the laptop lid closes in about a third of attempts; thin things (pens, card decks) slip; a switch out of reach is skipped.</li>
+      <li><b>Files:</b> each episode is saved in RoboTwin's current format (<code>data/</code>) and in the format of its released datasets (<code>data_released/</code>); <code>log.jsonl</code> has the labels and the mistake on each action.</li>
     </ul>
   </section>
 </div>
