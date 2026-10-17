@@ -1298,8 +1298,10 @@ class play_table(Base_Task):
         J = j.get_global_pose().to_transformation_matrix()
         axis, o = J[:3, 0], J[:3, 3]
         lang = "turn the switch " + ("off" if q0 > 0.5 * (lo + hi) else "on")
-        for arm in (self._arm_for(p), self._arm_for(p).opposite):
-            pre = self.get_grasp_pose(fx, arm, contact_point_id=0, pre_dis=0.06)
+        face = -fx.get_pose().to_transformation_matrix()[:3, 0]       # RoboTwin's turn_switch arm rule
+        first = ArmTag("right" if face[0] > 0 else "left")
+        for arm, back in ((first, 0.06), (first, 0.03), (first.opposite, 0.06)):
+            pre = self.get_grasp_pose(fx, arm, contact_point_id=0, pre_dis=back)
             pose = self.get_grasp_pose(fx, arm, contact_point_id=0, pre_dis=-0.015)
             if pre is None or pose is None:
                 continue

@@ -13,6 +13,10 @@ seed, skill, n = int(sys.argv[1]), sys.argv[2], int(sys.argv[3]) if len(sys.argv
 def make_cands(t):
     objs, conts = t.objects, t.containers
     if skill in ("open", "close", "toggle"):
+        if skill == "toggle" and os.environ.get("SWITCH_OFF"):
+            for f in t.fixtures:
+                j, i = t._fixture_joint(f); lo, hi = f.get_qlimits()[i]; q = f.get_qpos().copy(); q[i] = lo; f.set_qpos(q)
+            for _ in range(50): t.scene.step()
         if skill == "close":   # start it open
             for f in t.fixtures:
                 j, i = t._fixture_joint(f); lo, hi = f.get_qlimits()[i]; q = f.get_qpos().copy(); q[i] = lo + (0.6 if f.play_name == "015_laptop" else 0.8) * (hi - lo); f.set_qpos(q)
