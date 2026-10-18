@@ -144,11 +144,11 @@ code { font: 0.86em var(--f-mono); }
   <section>
     <h2>Where this stands</h2>
     <ul class="notes">
-      <li><b>Two sets:</b> 8 clean episodes (no injected mistakes) and 6 high-error ones (every action gets a severe, usually combined mistake). The chip on each episode says which; injected mistakes are named on the action.</li>
-      <li><b>New: opening and closing things.</b> About half the scenes include one of RoboTwin's articulated fixtures, placed as in their own tasks: a microwave, a cabinet drawer, a laptop or a switch. The hand grasps the handle and follows the door's arc or the drawer's slide; the switch is pressed on one half, then the other if it doesn't flip. In these batches: microwave opened and closed, drawer opened 3 of 4 times, laptop lid opened and closed. In single-skill tests the switch flipped on 4/4 and off 5/5.</li>
-      <li><b>Clean success:</b> 67% of 46 actions (presses 5/5, opens 3/3, closes 2/2, turn-arounds 5/7, moves 6/10, pushes 6/10). High-error: 32%.</li>
-      <li><b>The video:</b> the robot's own head-camera viewpoint with a wider lens so both arms and the whole table stay in frame. It is for viewing only; the dataset keeps RoboTwin's cameras (head, front, two wrists) unchanged. The expert demo below is RoboTwin's head camera as recorded.</li>
-      <li><b>Still weak:</b> the laptop lid closes in about a third of attempts; thin things (pens, card decks) slip; a switch out of reach is skipped.</li>
+      <li><b>Three sets from the same generator:</b> 8 clean episodes, 6 mixed (default settings: 30% of actions get a mistake, mostly mild) and 6 high-error (every action gets a severe, usually combined mistake). The chip on each episode says which; injected mistakes are named on the action.</li>
+      <li><b>Success in these batches:</b> clean 64% of 42 actions, mixed 79% of 29, high-error 52% of 29. Opening and closing the microwave, drawer and laptop and flipping the switch went 6 for 6 (clean) and 7 for 7 (mixed).</li>
+      <li><b>Per-skill benchmark</b> (each skill on many random scenes, no rendering): push 100%, pick two at once 100%, open microwave / laptop 7/7, close microwave 7/7, close drawer 5/5, put in the open drawer 4/4 when reachable, stack 88%, put in a container 83%, switch 83%, move 80%, shake 80%, tap with a tool 80%, turn around 70%, line up 67%. Weak: closing the laptop (about a third), two-handed lift and hand-over (rarely possible in a random scene).</li>
+      <li><b>Actions stay in RoboTwin's distribution:</b> 0.8&ndash;2.2% of frames have a joint outside the range of the released demos (the demos themselves 0.9%), step sizes match (99th percentile joint step 0.084&ndash;0.094 rad vs 0.098).</li>
+      <li><b>The video:</b> the robot's own head-camera viewpoint with a wider lens, so both arms and the whole table stay in frame. It is for viewing only; the dataset keeps RoboTwin's cameras (head, front, two wrists) unchanged.</li>
       <li><b>Files:</b> each episode is saved in RoboTwin's current format (<code>data/</code>) and in the format of its released datasets (<code>data_released/</code>); <code>log.jsonl</code> has the labels and the mistake on each action.</li>
     </ul>
   </section>

@@ -24,8 +24,11 @@ by RoboTwin's recorder.
 /data/user_data/mbronars/.miniconda3/envs/robotwin/bin/python collect_play.py --out OUT --episodes N --workers 3 --seed S
 ```
 
-Each episode runs in its own process (plan and record in one pass, ~5 min for
-~60 s of play). Output:
+Each episode runs in its own process (plan and record in one pass, ~5-12 min
+for ~60 s of play). Scenes and the opening actions replay identically from the
+seed (the planner is seeded per plan), but small floating-point differences in
+cuRobo's GPU kernels make later trajectories drift between runs: the recorded
+files, not a re-run, are the exact data. Output:
 
 * `OUT/data/episode_XXXXXXX.hdf5`: RoboTwin's current layout (`state/`, `action/`,
   `vision/`; action[t] = state[t+1]).
