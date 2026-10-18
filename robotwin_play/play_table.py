@@ -123,6 +123,7 @@ class play_table(Base_Task):
     def setup_demo(self, is_test=False, **kwags):
         # a separate stream for scene and play choices, seeded from the episode seed
         self.prng = np.random.default_rng(kwags.get("seed", 0) * 7919 + 17)
+        self._plan_seed = int(kwags.get("seed", 0)) * 7919 + 29
         self.play_cfg = kwags.get("play", {})
         self.n_plans = 0
         self.err = None
@@ -454,6 +455,12 @@ class play_table(Base_Task):
         f = self.robot.left_plan_path if arm == "left" else self.robot.right_plan_path
         self.n_plans += 1
         self._world(arm, near=pose[:3])
+        # cuRobo draws its optimisation seeds from torch's generator: seed it per
+        # plan so an episode replays identically from its seed
+        import torch
+        s = (self._plan_seed * 1000003 + self.n_plans) % (2 ** 31)
+        torch.manual_seed(s)
+        np.random.seed(s)
         try:
             return f([float(x) for x in pose], constraint_pose=constraint, last_qpos=q)
         except Exception:
@@ -598,6 +605,8 @@ class play_table(Base_Task):
             return plan
         P = np.asarray(plan["position"], dtype=np.float64).copy()
         n = len(P)
+        if n < 3:            # nothing to shake on a path this short
+            return plan
         if errors.has(e, "shaky"):
             P[:, :6] += errors.smooth_noise(self.prng, n, e["sigma"], 6)
         if errors.has(e, "jitter"):
@@ -1303,7 +1312,7 @@ class play_table(Base_Task):
                 break
         placed = self._place(actor, arm, [p0[0], p0[1], TABLE_Z], 0.04, 0.01)
         dq = t3d.quaternions.qmult(t3d.quaternions.qinverse(q0), actor.get_pose().q)
-        ok = turned and abs(dq[0]) < 0.96 and placed
+        ok = turned and abs(dq[0]) < 0.99 and placed      # turned by at least ~0.28 rad (it can slip back a little)
         return self._finish(actor, arm, placed, ok, lang)
 
     # ------------------------------------------------------------ fixtures
@@ -1915,7 +1924,7 @@ class play_table(Base_Task):
     def play_once(self):
         cfg = self.play_cfg
         segs = []
-        self._done, self._touched, self._skip = {}, {}, set()
+        self._done, self._touched, self._skip, self._fails = {}, {}, set(), {}
         tries = 0
         while len(segs) < cfg.get("max_actions", 10) and tries < cfg.get("max_tries", 40):
             tries += 1
@@ -1953,6 +1962,11 @@ class play_table(Base_Task):
                 self._touched[a.get_name()] = self._touched.get(a.get_name(), 0) + 1
             res.update(primitive=kind, target=[a.get_name() for a in args], start=f0, end=self.FRAME_IDX)
             segs.append(res)
+            key = (kind, tuple(a.get_name() for a in args))
+            if not res["success"]:
+                self._fails[key] = self._fails.get(key, 0) + 1
+                if self._fails[key] >= 2:           # tried twice: leave it be for this episode
+                    self._skip = getattr(self, "_skip", set()) | {key}
         self.info["info"] = {"scene": self.scene_desc, "segments": segs, "plans": self.n_plans,
                              "syncs": getattr(self, "n_syncs", 0)}
         return self.info
