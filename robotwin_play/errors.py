@@ -18,6 +18,8 @@ Finish stage         place_offset   set down away from the target (misses a bin,
                      release_early  the hand opens part-way through the carry
                      knock_over     set down half on top of a neighbour so something topples
 Other actions        push_offset    the push starts to one side (the object spins away)
+                     handle_slip    a door / drawer / lid handle slips out of the hand part-way
+                                    (mild: the hand grabs it again and finishes; severe: it doesn't)
                      press_miss     presses beside the thing instead of on it
                      tap_miss       the tool comes down beside the target
                      handover_miss  the receiving hand closes early / off the object
@@ -26,14 +28,17 @@ import os
 
 import numpy as np
 
-PICK = ("move", "put_in", "stack", "line_up", "reorient", "shake", "knock_with", "pour")
+PICK = ("move", "put_in", "stack", "line_up", "reorient", "shake", "knock_with", "pour", "stow")
 PICK_ERRORS = {"grasp_offset": 1.0, "grasp_high": 0.7, "unstable_grasp": 0.8, "close_early": 0.8, "close_late": 0.8,
                "lift_early": 0.8, "place_offset": 1.2, "drop_high": 0.8, "release_early": 0.6, "shaky": 0.45, "jitter": 0.45}
 OTHER = {"push": {"push_offset": 1.5, "shaky": 0.4, "jitter": 0.4},
          "press": {"press_miss": 1.5, "shaky": 0.4, "jitter": 0.4},
          "handover": {"handover_miss": 1.0, "grasp_offset": 0.5, "release_early": 0.5, "shaky": 0.4, "jitter": 0.4},
          "dual_pick": {"grasp_offset": 1.0, "close_early": 0.6, "place_offset": 0.8, "drop_high": 0.6, "shaky": 0.4, "jitter": 0.4},
-         "lift_together": {"grasp_offset": 1.0, "close_early": 0.6, "shaky": 0.5, "jitter": 0.5}}
+         "lift_together": {"grasp_offset": 1.0, "close_early": 0.6, "shaky": 0.5, "jitter": 0.5},
+         "open": {"handle_slip": 1.5, "shaky": 0.4, "jitter": 0.4},
+         "close": {"handle_slip": 1.5, "shaky": 0.4, "jitter": 0.4},
+         "toggle": {"press_miss": 1.5, "shaky": 0.4, "jitter": 0.4}}
 GRASP_STAGE = {"grasp_offset": 1.0, "grasp_high": 0.8, "close_early": 0.8, "lift_early": 0.6, "close_late": 0.6, "unstable_grasp": 1.2}
 FINISH_STAGE = {"knock_over": 1.4, "release_early": 1.0, "drop_high": 1.0, "place_offset": 0.8}
 
@@ -52,6 +57,7 @@ RANGES = {
     "press_miss": ((0.03, 0.05), (0.05, 0.08)),
     "tap_miss": ((0.03, 0.05), (0.06, 0.1)),
     "knock_over": ((0.02, 0.035), (0.02, 0.045)),
+    "handle_slip": ((0.3, 0.6), (0.15, 0.4)),       # how far along the hand loses the handle
 }
 
 
@@ -75,7 +81,7 @@ def _params(rng, t, severe):
         a = rng.uniform(-np.pi, np.pi)
         d = rng.uniform(lo, hi)
         e["offset_xy"] = [float(np.cos(a) * d), float(np.sin(a) * d)]
-    elif t == "release_early":
+    elif t in ("release_early", "handle_slip"):
         e["frac"] = float(rng.uniform(lo, hi))
     elif t == "jitter":
         e["sigma"] = float(rng.uniform(lo, hi))

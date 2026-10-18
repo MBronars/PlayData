@@ -6,12 +6,20 @@ from envs.play_table import play_table, _is_tool
 from envs.utils import UnStableError
 import numpy as np
 args = build_args("play_clean", None, os.environ.get("PLAY_DBG_OUT", "/tmp/robotwin_play_dbg")); args["save_data"] = False
+if os.environ.get("OBJECTS"):
+    args["play"]["objects"] = os.environ["OBJECTS"].split(",")
+    args["play"]["p_container"] = float(os.environ.get("P_CONTAINER", args["play"].get("p_container", 0.7)))
 if os.environ.get("FIXTURE"):
     args["play"]["p_fixture"] = 1.0
     args["play"]["fixtures"] = [os.environ["FIXTURE"]]
 seed, skill, n = int(sys.argv[1]), sys.argv[2], int(sys.argv[3]) if len(sys.argv) > 3 else 3
 def make_cands(t):
     objs, conts = t.objects, t.containers
+    if skill == "stow":   # the drawer open, something to put in it
+        for f in t.fixtures:
+            j, i = t._fixture_joint(f); lo, hi = f.get_qlimits()[i]; q = f.get_qpos().copy(); q[i] = lo + 0.85 * (hi - lo); f.set_qpos(q)
+        for _ in range(50): t.scene.step()
+        return [(a, f) for a in objs for f in t.fixtures]
     if skill in ("open", "close", "toggle"):
         if skill == "toggle" and os.environ.get("SWITCH_OFF"):
             for f in t.fixtures:
@@ -61,6 +69,8 @@ for k in range(12):
         t.close_env(); continue
     t._done, t._touched = {}, {}
     cands = make_cands(t)
+    if os.environ.get("ONLY"):   # only candidates whose first object is one of these
+        cands = [c for c in cands if c[0].get_name() in os.environ["ONLY"].split(",")]
     if cands: break
     t.close_env()
 objs, conts = t.objects, t.containers
@@ -76,11 +86,11 @@ for c in cands:
         print("  ERR", t.err)
     t._ignore = set(c)
     if os.environ.get("TRACK"):
-        tracked = [a for a in c if a.get_name() == os.environ["TRACK"]]
+        tracked = [a for a in t.objects + t.containers if a.get_name() == os.environ["TRACK"]] or [c[0]]
         t.save_freq = 5
         def _tp():
             a = tracked[0]
-            print(f"      F{t.FRAME_IDX:4d} obj={np.round(a.get_pose().p, 3)} eeL={np.round(t._ee('left')[:3], 3)} eeR={np.round(t._ee('right')[:3], 3)} gripR={t.robot.get_right_arm_jointState()[-1]:.2f}", flush=True)
+            print(f"      F{t.FRAME_IDX:4d} obj={np.round(a.get_pose().p, 3)} eeL={np.round(t._ee('left')[:3], 3)} eeR={np.round(t._ee('right')[:3], 3)} gripR={t.robot.get_right_arm_jointState()[-1]:.2f} tilt={t._tilt(a):.2f}", flush=True)
             t.FRAME_IDX += 1
         t._take_picture = _tp
     res = getattr(t, "p_" + skill)(*c); t.plan_success = True; t.err = None
