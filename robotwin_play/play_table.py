@@ -53,7 +53,7 @@ FIXTURES = {
     "044_microwave": dict(ids=[0, 1], x=(-0.12, -0.02), y=(0.15, 0.2), z=(0.8, 0.8), q=[0.707, 0, 0, 0.707],
                           yaw=0.0, cps=[0, 1], props=(0.0, 0.0), word="microwave door"),
     "036_cabinet": dict(ids=[46653], x=(-0.05, 0.05), y=(0.155, 0.155), z=(0.741, 0.741), q=[1, 0, 0, 1],
-                        yaw=0.0, cps=[0, 1], props=None, word="drawer"),
+                        yaw=0.0, cps=[0, 1], props=(5.0, 0.0, 2.0), word="drawer"),   # some friction: it stays where it's left
     "015_laptop": dict(ids=list(range(11)), x=(-0.05, 0.05), y=(-0.1, 0.05), z=(0.741, 0.741), q=[0.7, 0, 0, 0.7],
                        yaw=np.pi / 3, cps=[0, 1, 2], props=(1.0, 0.0), word="laptop"),
     "056_switch": dict(ids=list(range(8)), x=(-0.25, 0.25), y=(0.0, 0.1), z=(0.81, 0.84), q=[0.704141, 0, 0, 0.71006],
@@ -840,7 +840,7 @@ class play_table(Base_Task):
                 return bool(held), arm_
         return None, arm
 
-    def _place(self, actor, arm, target, pre_dis, dis, up=0.07, release=True, **kw):
+    def _place(self, actor, arm, target, pre_dis, dis, up=0.07, release=True, over_extra=0.08, **kw):
         """Put the held object down at target (7-pose or xyz) if that can be
         planned; returns True if it was executed."""
         target = list(target) + [1, 0, 0, 0] if len(target) == 3 else list(target)
@@ -875,7 +875,7 @@ class play_table(Base_Task):
         # carry over at the lifted height, then come down onto the spot (the
         # planner knows nothing but the table: a diagonal path cuts through walls)
         over = list(pre)
-        over[2] = max(float(pre[2]), min(float(self._ee(arm)[2]), float(pre[2]) + 0.08))
+        over[2] = max(float(pre[2]), min(float(self._ee(arm)[2]), float(pre[2]) + over_extra))
         legs = [(over, None), (pre, None), (pose, CONS)]
         if errors.has(e, "carry_hit"):
             hit = self._carry_hit_pose(actor, arm, target[:3])
@@ -1359,7 +1359,14 @@ class play_table(Base_Task):
         self.last_grasp = dict(contact_point=cp if isinstance(cp, str) else int(cp), arm=str(arm))
         lo_, hi_ = fx.get_qlimits()[qi]
         if fx.play_name == "015_laptop" and dq_total < 0 and self._fixture_frac(fx) > target_frac + 0.08:
-            self._press_lid_down(fx, arm, lo_ + (hi_ - lo_) * target_frac - float(fx.get_qpos()[qi]))
+            for a_ in (arm, arm.opposite):
+                pressed = self._press_lid_down(fx, a_, lo_ + (hi_ - lo_) * target_frac - float(fx.get_qpos()[qi]))
+                if os.environ.get("PLAY_DEBUG"):
+                    print(f"   PRESS LID {a_} ran={pressed} lid now {self._fixture_frac(fx):.2f}", flush=True)
+                if pressed:
+                    if a_ != arm:
+                        self._home(a_)
+                    break
         q1 = float(fx.get_qpos()[qi])
         moved = (q1 - q0) / dq_total if abs(dq_total) > 1e-6 else 0.0
         if os.environ.get("PLAY_DEBUG"):
@@ -1382,6 +1389,9 @@ class play_table(Base_Task):
         J = j.get_global_pose().to_transformation_matrix()
         a, o = J[:3, 0], J[:3, 3]
         q = TOPDOWN[str(arm)]
+        # pushing down on the edge must turn the lid shut (not when the edge is past the hinge)
+        if float(np.cross(T0[:3, 3] - o, [0, 0, -1.0]) @ a) * dq <= 0:
+            return False
         def tip_on(T):      # fingertips 1 cm in from the edge, on the lid's outer face
             E = T[:3, 3]
             u = (E - o) - ((E - o) @ a) * a
@@ -1390,16 +1400,17 @@ class play_table(Base_Task):
         legs = [(list(np.asarray(tip_on(T0)[:3]) + [0, 0, 0.05]) + list(q), None), (tip_on(T0), CONS)]
         for k in range(1, 4):
             legs.append((tip_on(self._moved_by(fx, T0, dq * k / 3)), None))
-        # getting above the edge: with the laptop as an obstacle, so the hand
-        # doesn't sweep the lid back open on its way
-        ign = set(getattr(self, "_ignore", ()))
-        self._ignore = ign - {fx}
-        try:
-            first = self._plan_chain(arm, legs[:1], flips=())
-        finally:
-            self._ignore = ign
+        # getting above the edge: straight up out of the lid's box first, then
+        # across high above it, so the hand doesn't sweep the lid back open
+        ee = self._ee(arm)
+        top = float(self._aabb(fx)[1][2]) + 0.06 + TIP
+        up = list(ee[:3]) + list(ee[3:])
+        up[2] = max(up[2], top)
+        across = list(np.asarray(legs[0][0][:3]) * [1, 1, 0] + [0, 0, max(top, legs[0][0][2])]) + list(q)
+        first = self._plan_chain(arm, [(up, None), (across, None), legs[0]], flips=())
         if first is None:
             return False
+        first = [first[0], first[1], first[2]]
         plans = None
         for m in range(len(legs), 2, -1):
             plans = self._plan_chain(arm, legs[1:m], q0=self._q_after(arm, first), flips=())
@@ -1408,7 +1419,7 @@ class play_table(Base_Task):
         if plans is None:
             return False
         self._sync(arm)
-        self._run([("move", arm, first[0]), ("grip", arm, 0.0)] + [("move", arm, pl) for pl in plans])
+        self._run([("move", arm, f_) for f_ in first] + [("grip", arm, 0.0)] + [("move", arm, pl) for pl in plans])
         ee = self._ee(arm)
         self._go(arm, [(list(ee[:3] + [0, 0, 0.06]) + list(ee[3:]), None)], grip_after=1.0)
         return True
@@ -1486,14 +1497,14 @@ class play_table(Base_Task):
         link = fx.link_dict[fx.config["contact_points"][0]["base"]].get_name()
         self._ignore_links = {(fx, link)}
         try:
-            pre = top - floor + 0.015         # its bottom clears the drawer walls
+            pre = top - floor + 0.02          # its bottom just clears the drawer walls
             target = [c[0], c[1], floor + 0.004]
-            st, arm = self._start(actor, lang, lift=max(0.12, top - TABLE_Z + 0.05), then=target, then_dz=(pre + 0.03, pre))
+            st, arm = self._start(actor, lang, lift=top - TABLE_Z + 0.025, then=target, then_dz=(pre,))
             if st is None:
                 return None
             if not st:
                 return self._res(False, lang, arm)
-            placed = self._place(actor, arm, target, pre, 0.02)
+            placed = self._place(actor, arm, target, pre, 0.02, over_extra=0.0)
             dl, dh = (np.asarray(x) for x in fx.link_dict[link].compute_global_aabb_tight())
             xy, bot = self._xy(actor), self._aabb(actor)[0][2]
             ok = bool(np.all(xy > dl[:2]) and np.all(xy < dh[:2]) and bot < top - 0.02)
@@ -1838,6 +1849,16 @@ class play_table(Base_Task):
         return res
 
     # ---------------------------------------------------------------- loop
+    def _stack_weight(self, a, b):
+        """Stable stacks most of the time, a wobbly one now and then: full
+        weight when b's top is at least as big as a's footprint and a isn't
+        tall and narrow."""
+        alo, ahi = self._aabb(a)
+        blo, bhi = self._aabb(b)
+        da, db = ahi - alo, bhi - blo
+        stable = db[0] * db[1] >= da[0] * da[1] and da[2] <= 1.6 * min(da[0], da[1])
+        return 1.0 if stable else 0.25
+
     def _choose(self):
         objs = [a for a in self.objects if self._on_table(a)]
         conts = [c for c in self.containers if self._on_table(c)]
@@ -1870,15 +1891,16 @@ class play_table(Base_Task):
                 opts.append((1.0 * w / len(conts), "put_in", (a, c)))
             for b in objs:
                 if b is not a:
-                    opts.append((0.6 * w / max(len(objs) - 1, 1), "stack", (a, b)))
+                    if any(b.get_name().startswith(n) for n in STACK_BASES):
+                        opts.append((0.6 * w * self._stack_weight(a, b) / max(len(objs) - 1, 1), "stack", (a, b)))
                     opts.append((0.35 * w / max(len(objs) - 1, 1), "line_up", (a, b)))
                     if _is_tool(a):
                         opts.append((0.9 * w / max(len(objs) - 1, 1), "knock_with", (a, b)))
+                    if self._xy(a)[0] < 0 < self._xy(b)[0]:
+                        opts.append((0.8 / max(len(objs) - 1, 1), "dual_pick", (a, b)))
             for c in conts:
                 if any(c.get_name().startswith(n) for n in STACK_BASES):
                     opts.append((0.25 * w / len(conts), "stack", (a, c)))
-                    if a.get_pose().p[0] < 0 < b.get_pose().p[0]:
-                        opts.append((0.8 / max(len(objs) - 1, 1), "dual_pick", (a, b)))
         for c in conts:
             opts.append((0.6, "lift_together", (c,)))
             if any(c.get_name().startswith(n) for n in OPEN_TOP) and any(self._inside(o, c) for o in objs):
