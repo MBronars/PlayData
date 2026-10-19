@@ -877,7 +877,7 @@ class play_table(Base_Task):
                 return bool(held), arm_
         return None, arm
 
-    def _place(self, actor, arm, target, pre_dis, dis, up=0.07, release=True, over_extra=0.08, **kw):
+    def _place(self, actor, arm, target, pre_dis, dis, up=0.07, release=True, over_extra=0.08, yaw=None, **kw):
         """Put the held object down at target (7-pose or xyz) if that can be
         planned; returns True if it was executed."""
         target = list(target) + [1, 0, 0, 0] if len(target) == 3 else list(target)
@@ -909,6 +909,8 @@ class play_table(Base_Task):
             want = np.asarray(kw["align_axis"], dtype=float)
             yaw = (np.arctan2(want[1], want[0]) - np.arctan2(ax[1], ax[0]) + np.pi / 2) % np.pi - np.pi / 2
             (pre, _), (pose, _) = self._yawed([(pre, None), (pose, None)], target[:3], yaw)
+        elif yaw is not None:      # turned by the caller (to fit a slot)
+            (pre, _), (pose, _) = self._yawed([(pre, None), (pose, None)], target[:3], yaw)
         # carry over at the lifted height, then come down onto the spot (the
         # planner knows nothing but the table: a diagonal path cuts through walls)
         over = list(pre)
@@ -922,7 +924,7 @@ class play_table(Base_Task):
             upp = list(pose)
             upp[2] += up
             legs.append((upp, CONS))
-        plans = self._plan_about(arm, legs, target[:3], angs=(0.0, np.pi) if kw["constrain"] == "align" else (0.0, np.pi, np.pi / 2, -np.pi / 2))
+        plans = self._plan_about(arm, legs, target[:3], angs=(0.0, np.pi) if (kw["constrain"] == "align" or yaw is not None) else (0.0, np.pi, np.pi / 2, -np.pi / 2))
         if os.environ.get("PLAY_DEBUG"):
             print(f"   PLACE {actor.get_name()} {arm} target={np.round(target[:3], 3)} pre={np.round(pre[:3], 3)} pose={np.round(pose[:3], 3)} "
                   f"planned={plans is not None} {'' if plans else self._why}", flush=True)
@@ -1640,7 +1642,7 @@ class play_table(Base_Task):
         word = FIXTURES[fx.play_name]["word"]
         if self._fixture_frac(fx) > (0.6 if fx.play_name == "036_cabinet" else 0.5):
             return None
-        hi = {"015_laptop": (0.5, 0.65), "036_cabinet": (0.8, 0.95)}.get(fx.play_name, (0.6, 0.85))   # a lid past vertical can't be closed
+        hi = {"015_laptop": (0.5, 0.65), "036_cabinet": (0.97, 1.0)}.get(fx.play_name, (0.6, 0.85))   # the handle slips ~20%   # a lid past vertical can't be closed
         frac = self._fixture_frac(fx)
         force = os.environ.get("PLAY_STRATEGY")    # tests: hook / crack / push / grasp
         if fx.play_name == "036_cabinet":
@@ -1649,7 +1651,7 @@ class play_table(Base_Task):
                 if res is not None:
                     return res
             if frac < 0.2 and (force == "crack" or (not force and self.prng.random() < 0.35)):     # just crack it open
-                return self._operate(fx, float(self.prng.uniform(0.45, 0.6)), f"pull the {word} open a little")
+                return self._operate(fx, float(self.prng.uniform(0.62, 0.72)), f"pull the {word} open a little")
         return self._operate(fx, float(self.prng.uniform(*hi)), f"open the {word}")
 
     def p_close(self, fx):
@@ -1695,7 +1697,7 @@ class play_table(Base_Task):
         lo, hi = self._aabb(actor)
         if os.environ.get("PLAY_DEBUG"):
             print(f"   STOW {actor.get_name()} size {np.round(hi - lo, 3)} slot {np.round(size, 3)} frac {self._fixture_frac(fx):.2f}", flush=True)
-        if np.any(np.sort((hi - lo)[:2]) > np.sort(size) - 0.01) or hi[2] - lo[2] > 0.16:
+        if np.any(np.sort((hi - lo)[:2]) > np.sort(size) - 0.005) or hi[2] - lo[2] > 0.16:
             self._why = "doesn't fit"
             return None    # doesn't fit in the open part
         lang = f"put the {self._name(actor)} in the drawer"
@@ -1709,7 +1711,17 @@ class play_table(Base_Task):
                 return None
             if not st:
                 return self._res(False, lang, arm)
-            placed = self._place(actor, arm, target, pre, 0.02, over_extra=0.0)
+            # turned so its long side runs along the drawer's long side
+            R = t3d.quaternions.quat2mat(np.asarray(actor.get_pose().q, float))
+            ext = np.asarray(actor.config["extents"], float) * np.asarray(actor.config["scale"], float)
+            horiz = [k for k in range(3) if abs(R[2, k]) < 0.5]
+            k = max(horiz, key=lambda k: ext[k]) if horiz else 0
+            long_ax = R[:, k]
+            slot_ax = np.array([1.0, 0, 0]) if size[0] >= size[1] else np.array([0, 1.0, 0])
+            yaw = (np.arctan2(slot_ax[1], slot_ax[0]) - np.arctan2(long_ax[1], long_ax[0]) + np.pi / 2) % np.pi - np.pi / 2
+            lo2, hi2 = self._aabb(actor)
+            fits_as_is = (hi2 - lo2)[0] <= size[0] - 0.005 and (hi2 - lo2)[1] <= size[1] - 0.005
+            placed = self._place(actor, arm, target, pre, 0.02, over_extra=0.0, yaw=None if fits_as_is else yaw)
             dl, dh = (np.asarray(x) for x in fx.link_dict[link].compute_global_aabb_tight())
             xy, bot = self._xy(actor), self._aabb(actor)[0][2]
             ok = bool(np.all(xy > dl[:2]) and np.all(xy < dh[:2]) and bot < top - 0.02)
@@ -2141,7 +2153,7 @@ class play_table(Base_Task):
                     opts.append((w, "toggle", (f,)))
             elif frac < (0.6 if f.play_name == "036_cabinet" else 0.5):
                 if done.get("open", 0) < 2:                  # not an open-close loop
-                    opts.append((w, "open", (f,)))
+                    opts.append((w * (0.4 if done.get("close", 0) else 1.0), "open", (f,)))
                     self._stow_mark = done.get("stow", 0)
             elif done.get("close", 0) < 2:
                 empty_drawer = f.play_name == "036_cabinet" and not stowed and objs
