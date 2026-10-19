@@ -1,7 +1,7 @@
 """Collect RoboTwin play episodes.
 
     python collect_play.py --out OUT --episodes N --workers W --seed S [--config play_clean] [--embodiment aloha-agilex]
-                           [--p_err 0.3] [--err_severity 0.15]
+                           [--p_err 0.3] [--err_severity 0.15] [--p_fixture 0.45] [--fixtures 036_cabinet,...]
 
 Every episode runs in its own process (plan and record in one pass) and is
 written by RoboTwin's own recorder: OUT/data/episode_XXXXXXX.hdf5 (+ video/,
@@ -44,6 +44,10 @@ def build_args(config, embodiment, out):
     args.setdefault("play", {})["embodiment_name"] = args["embodiment_name"]
     args["play"]["p_err"] = float(getattr(opts_global, "p_err", 0.3))
     args["play"]["err_severity"] = float(getattr(opts_global, "err_severity", 0.15))
+    if getattr(opts_global, "p_fixture", None) is not None:
+        args["play"]["p_fixture"] = float(opts_global.p_fixture)
+    if getattr(opts_global, "fixtures", None):
+        args["play"]["fixtures"] = opts_global.fixtures.split(",")
     args["task_name"] = "play_table"
     args["task_config"] = config
     args["save_path"] = out
@@ -115,6 +119,8 @@ def main():
     p.add_argument("--embodiment", default=None)
     p.add_argument("--p_err", type=float, default=0.3, help="fraction of actions with an injected near-failure")
     p.add_argument("--err_severity", type=float, default=0.15, help="fraction of those that are large / combined")
+    p.add_argument("--p_fixture", type=float, default=None, help="fraction of scenes with an articulated fixture (default 0.45)")
+    p.add_argument("--fixtures", default=None, help="comma list to draw from, e.g. 036_cabinet,044_microwave")
     opts = p.parse_args()
     os.makedirs(opts.out, exist_ok=True)
     os.environ.setdefault("PYTHONHASHSEED", "0")

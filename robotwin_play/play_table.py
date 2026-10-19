@@ -52,8 +52,10 @@ TOOLS = ["020_hammer", "084_woodenmallet", "100_seal", "058_markpen", "093_brush
 FIXTURES = {
     "044_microwave": dict(ids=[0, 1], x=(-0.12, -0.02), y=(0.15, 0.2), z=(0.8, 0.8), q=[0.707, 0, 0, 0.707],
                           yaw=0.0, cps=[0, 1], props=(0.0, 0.0), word="microwave door"),
-    "036_cabinet": dict(ids=[46653], x=(-0.05, 0.05), y=(0.155, 0.155), z=(0.741, 0.741), q=[1, 0, 0, 1],
-                        yaw=0.0, cps=[0, 1], props=(5.0, 0.0, 2.0), word="drawer"),   # some friction: it stays where it's left
+    # y: RoboTwin uses 0.155; a little closer so the open drawer is within reach. Some joint friction:
+    # it stays where it is left
+    "036_cabinet": dict(ids=[46653], x=(-0.05, 0.05), y=(0.09, 0.13), z=(0.741, 0.741), q=[1, 0, 0, 1],
+                        yaw=0.0, cps=[0, 1], props=(1.0, 0.0, 0.3), word="drawer"),
     "015_laptop": dict(ids=list(range(11)), x=(-0.05, 0.05), y=(-0.1, 0.05), z=(0.741, 0.741), q=[0.7, 0, 0, 0.7],
                        yaw=np.pi / 3, cps=[0, 1, 2], props=(1.0, 0.0), word="laptop"),
     "056_switch": dict(ids=list(range(8)), x=(-0.25, 0.25), y=(0.0, 0.1), z=(0.81, 0.84), q=[0.704141, 0, 0, 0.71006],
@@ -250,12 +252,18 @@ class play_table(Base_Task):
         spec = FIXTURES[name]
         mid = int(self.prng.choice(spec["ids"]))
         np.random.seed(int(self.prng.integers(2 ** 31)))    # rand_pose draws from np.random
+        ylim = list(spec["y"])
+        if name == "036_cabinet" and os.environ.get("PLAY_CAB_Y"):
+            ylim = [float(os.environ["PLAY_CAB_Y"])] * 2
         fx = rand_create_sapien_urdf_obj(scene=self, modelname=name, modelid=mid, xlim=list(spec["x"]),
-                                         ylim=list(spec["y"]), zlim=list(spec["z"]), rotate_rand=spec["yaw"] > 0,
+                                         ylim=ylim, zlim=list(spec["z"]), rotate_rand=spec["yaw"] > 0,
                                          rotate_lim=[0, 0, spec["yaw"]], qpos=spec["q"], fix_root_link=True)
         fx.set_mass(0.01)
-        if spec["props"] is not None:
-            fx.set_properties(*spec["props"])
+        props = spec["props"]
+        if name == "036_cabinet" and os.environ.get("PLAY_CAB_PROPS"):
+            props = tuple(float(x) for x in os.environ["PLAY_CAB_PROPS"].split(","))
+        if props is not None:
+            fx.set_properties(*props)
         fx.play_name, fx.play_mid = name, mid
         lo, hi = fx.get_qlimits()[self._fixture_joint(fx)[1]]
         start = {"044_microwave": (0.0, 0.0), "036_cabinet": (0.0, 0.0), "015_laptop": (0.15, 0.25),
@@ -590,6 +598,26 @@ class play_table(Base_Task):
         seq[f"{arm}_arm"] = {"position": pos, "velocity": vel}
         self.take_dense_action(seq)
         self.n_syncs = getattr(self, "n_syncs", 0) + 1
+
+    @staticmethod
+    def _merge_plans(plans, squeeze=0.8):
+        """Several planned segments (each starting and ending at rest) as one
+        continuous motion: the joint path concatenated and re-timed with one
+        smooth speed profile (ease in, cruise, ease out), so a pull along a
+        drawer's slide or a door's arc doesn't stop at every waypoint."""
+        P = np.concatenate([np.asarray(p["position"], float)[(1 if i else 0):] for i, p in enumerate(plans)], 0)
+        if len(P) < 4:
+            return dict(plans[0], position=P, velocity=np.zeros_like(P))
+        d = np.r_[0.0, np.cumsum(np.linalg.norm(np.diff(P, axis=0), axis=1))]
+        if d[-1] < 1e-6:
+            return dict(plans[0], position=P[:2], velocity=np.zeros_like(P[:2]))
+        n = max(4, int(squeeze * len(P)))                  # the stops are what made it slow
+        u = np.linspace(0, 1, n)
+        s_ = 0.5 - 0.5 * np.cos(np.pi * u)                 # smooth start and stop
+        s_ = 0.6 * s_ + 0.4 * np.clip((u - 0.15) / 0.7, 0, 1) if n > 20 else s_   # mostly steady in the middle
+        s_ = (s_ - s_[0]) / (s_[-1] - s_[0])
+        Q = np.stack([np.interp(s_ * d[-1], d, P[:, k]) for k in range(P.shape[1])], 1)
+        return dict(plans[0], position=Q, velocity=np.gradient(Q, axis=0) * 250.0)
 
     def _set_paths(self, arm, plans):
         if arm == "left":
@@ -1316,7 +1344,7 @@ class play_table(Base_Task):
         return self._finish(actor, arm, placed, ok, lang)
 
     # ------------------------------------------------------------ fixtures
-    def _operate(self, fx, target_frac, lang, again=1):
+    def _operate(self, fx, target_frac, lang, again=1, arms=None, hold=False):
         """Grasp the fixture's handle and move the hand along the joint's own
         arc (door, lid) or slide (drawer) until the joint is at target_frac of
         its range, in short planned segments; let go and back off."""
@@ -1326,7 +1354,7 @@ class play_table(Base_Task):
         dq_total = lo + (hi - lo) * target_frac - q0
         p = fx.get_pose().p
         best = None
-        for arm in (self._arm_for(p), self._arm_for(p).opposite):
+        for arm in (arms or (self._arm_for(p), self._arm_for(p).opposite)):
             for cp, pre, pose in self._handle_grasps(fx, arm):
                 plans = self._plan_chain(arm, [(pre, None), (pose, CONS)], flips=())
                 if plans is None:
@@ -1361,8 +1389,15 @@ class play_table(Base_Task):
             moves = moves[:max(1, int(round(e["frac"] * len(moves))))]    # the hand loses the handle here
             again = again if not e.get("severe") else 0
             self.err = None                                                 # a re-grasp goes cleanly
+        moves = [self._merge_plans(moves)]                                  # one steady pull, not stop-and-go
         self._run([("both", (arm, plans[0], 1.0), (arm.opposite, home, None)) if home is not None else ("move", arm, plans[0]),
-                   ("move", arm, plans[1]), ("grip", arm, 0.0)] + [("move", arm, mv) for mv in moves] + [("grip", arm, 1.0)])
+                   ("move", arm, plans[1]), ("grip", arm, 0.0)] + [("move", arm, mv) for mv in moves] +
+                  ([] if hold else [("grip", arm, 1.0)]))
+        if hold:                                   # keeps holding it (the other hand has something to do)
+            q1 = float(fx.get_qpos()[qi])
+            moved = (q1 - q0) / dq_total if abs(dq_total) > 1e-6 else 0.0
+            self.last_grasp = dict(contact_point=cp if isinstance(cp, str) else int(cp), arm=str(arm))
+            return self._res(moved > 0.6, lang, arm, moved=float(moved), fixture=fx.get_name(), held=True)
         ee = self._ee(arm)
         self._go(arm, [(list(ee[:3] - 0.08 * _hand_x(ee[3:])) + list(ee[3:]), None)])
         self.last_grasp = dict(contact_point=cp if isinstance(cp, str) else int(cp), arm=str(arm))
@@ -1445,9 +1480,14 @@ class play_table(Base_Task):
             pose = self.get_grasp_pose(fx, arm, contact_point_id=cp, pre_dis=0.0)
             if pre is None or pose is None:
                 continue
-            out.append((cp, pre, pose))
-            out.append((cp, list(pre[:3]) + list(t3d.quaternions.qmult(pre[3:], fq)),
-                        list(pose[:3]) + list(t3d.quaternions.qmult(pose[3:], fq))))
+            # somewhere along the handle, not always its middle
+            Rz = t3d.quaternions.quat2mat(pose[3:])[:, 2]
+            for sh in self.prng.permutation([0.0, 0.02, -0.02]) if fx.play_name in ("036_cabinet", "044_microwave") else [0.0]:
+                pre_s = list(np.asarray(pre[:3]) + sh * Rz) + list(pre[3:])
+                pose_s = list(np.asarray(pose[:3]) + sh * Rz) + list(pose[3:])
+                out.append((cp, pre_s, pose_s))
+                out.append((cp, list(pre_s[:3]) + list(t3d.quaternions.qmult(pre_s[3:], fq)),
+                            list(pose_s[:3]) + list(t3d.quaternions.qmult(pose_s[3:], fq))))
         if fx.play_name == "015_laptop":
             j, _ = self._fixture_joint(fx)
             J = j.get_global_pose().to_transformation_matrix()
@@ -1466,17 +1506,173 @@ class play_table(Base_Task):
                 out.append(("edge", list(ee - 0.08 * x) + q, list(ee) + q))
         return out
 
+    def _drawer_geom(self, fx):
+        """Drawer front (handle front y), inside of its front wall, top, x middle,
+        and the unit vector it slides out along (towards the robot)."""
+        j, _ = self._fixture_joint(fx)
+        link = fx.link_dict[fx.config["contact_points"][0]["base"]]
+        dlo, dhi = (np.asarray(x) for x in link.compute_global_aabb_tight())
+        J = j.get_global_pose().to_transformation_matrix()
+        lo, hi = fx.get_qlimits()[self._fixture_joint(fx)[1]]
+        out = J[:3, 0] * (1 if hi > lo else -1)
+        out = out if out[1] < 0 else -out
+        return dict(front=float(dlo[1]), inner=float(dlo[1]) + 0.05, top=float(dhi[2]), x=0.5 * float(dlo[0] + dhi[0]),
+                    zmid=0.5 * float(dlo[2] + dhi[2]), out=out, lo=dlo, hi=dhi)
+
+    def _slide_hand(self, fx, arm, tip0, q, dq, approach, grip, lang, label):
+        """Fingertips at tip0 (world), hand orientation q, gripper value grip;
+        come in from tip0 + approach, then ride along with the drawer by dq;
+        let go and back off. One smooth motion along the slide."""
+        x = _hand_x(q)
+        ee = lambda tip: list(np.asarray(tip) - TIP * x) + list(q)
+        T0 = np.eye(4)
+        T0[:3, 3] = tip0
+        n = int(np.clip(np.ceil(abs(dq) / 0.025), 2, 8))
+        path = [ee(self._moved_by(fx, T0, dq * k / n)[:3, 3]) for k in range(1, n + 1)]
+        legs = [(ee(np.asarray(tip0) + approach), None), (ee(tip0), CONS)]
+        first = self._plan_chain(arm, legs, flips=())
+        if os.environ.get("PLAY_DEBUG"):
+            print(f"   {label} try {arm} tip {np.round(tip0, 3)} approach planned={first is not None} {'' if first else self._why}", flush=True)
+        if first is None:
+            return None
+        moves = None
+        for m in range(n, max(1, n // 2) - 1, -1):
+            moves = self._plan_chain(arm, [(w, None) for w in path[:m]], q0=self._q_after(arm, first), flips=())
+            if moves is not None:
+                break
+        if moves is None:
+            return None
+        j, qi = self._fixture_joint(fx)
+        q0 = float(fx.get_qpos()[qi])
+        home = self._home_plan(arm.opposite)
+        self._sync(arm)
+        self._run([("both", (arm, None, grip), (arm.opposite, home, None)) if home is not None else ("grip", arm, grip),
+                   ("move", arm, first[0]), ("move", arm, first[1]), ("move", arm, self._merge_plans(moves)), ("grip", arm, 1.0)])
+        e2 = self._ee(arm)
+        self._go(arm, [(list(e2[:3] + 0.6 * np.asarray(approach)) + list(e2[3:]), None)])
+        q1 = float(fx.get_qpos()[qi])
+        moved = (q1 - q0) / dq if abs(dq) > 1e-6 else 0.0
+        if os.environ.get("PLAY_DEBUG"):
+            print(f"   {label} {fx.get_name()} {arm} q {q0:.3f}->{q1:.3f} (wanted {q0 + dq:.3f}) moved {moved:.2f}", flush=True)
+        self.last_grasp = dict(contact_point=label.lower(), arm=str(arm))
+        return self._res(moved > 0.6, lang, arm, moved=float(moved), fixture=fx.get_name(), strategy=label.lower())
+
+    def _hook_drawer(self, fx, target_frac, lang):
+        """A drawer that's open a little: fingers in behind its front wall from
+        above, and slide it out the rest of the way."""
+        g = self._drawer_geom(fx)
+        j, qi = self._fixture_joint(fx)
+        lo, hi = fx.get_qlimits()[qi]
+        dq = lo + (hi - lo) * target_frac - float(fx.get_qpos()[qi])
+        body_front = min(np.asarray(L.compute_global_aabb_tight()[0])[1] for L in fx.actor.get_links()
+                         if L.get_collision_shapes() and L.get_name() != fx.config["contact_points"][0]["base"])
+        if os.environ.get("PLAY_DEBUG"):
+            print(f"   HOOK geom front {g['front']:.3f} inner {g['inner']:.3f} body_front {body_front:.3f} top {g['top']:.3f} out {np.round(g['out'], 2)} dq {dq:.3f}", flush=True)
+        if g["inner"] + 0.012 > body_front - 0.01:
+            return None                            # not open far enough to get the fingers in
+        dy, dz = float(os.environ.get("HOOK_DY", 0.065)), float(os.environ.get("HOOK_DZ", 0.05))
+        tip = np.array([g["x"] + float(self.prng.uniform(-0.04, 0.04)), g["front"] + dy, g["top"] - dz])
+        p = fx.get_pose().p
+        def pitched(deg, roll):
+            # pointing forward-down into the gap behind the drawer front (lower wrist than straight down)
+            a = np.deg2rad(deg)
+            x = np.array([0.0, np.cos(a), -np.sin(a)])
+            y = np.array([1.0, 0.0, 0.0]) * (1 if roll == 0 else -1)
+            return list(t3d.quaternions.mat2quat(np.stack([x, y, np.cross(x, y)], 1)))
+        for arm in (self._arm_for(p), self._arm_for(p).opposite):
+            for q in [pitched(d, r) for d in (45, 60) for r in (0, 1)] + [TOPDOWN[str(arm)]]:
+                res = self._slide_hand(fx, arm, tip, q, dq, -0.05 * _hand_x(q), 0.0, lang, "HOOK")
+                if res is not None:
+                    return res
+        return None
+
+    def _push_drawer(self, fx, target_frac, lang):
+        """Push the drawer shut with the closed hand on its front."""
+        g = self._drawer_geom(fx)
+        j, qi = self._fixture_joint(fx)
+        lo, hi = fx.get_qlimits()[qi]
+        dq = lo + (hi - lo) * target_frac - float(fx.get_qpos()[qi])
+        hz = float(fx.get_contact_point(0, "list")[2])        # at handle height, like the expert's grasp
+        tip = np.array([g["x"] + float(self.prng.uniform(-0.05, 0.05)), g["front"] - 0.004, hz])
+        p = fx.get_pose().p
+        q_fwd = [0.5, -0.5, -0.5, 0.5]           # horizontal, pointing at the drawer (as in the expert demos)
+        for arm in (self._arm_for(p), self._arm_for(p).opposite):
+            # the flat of the fingers against its front, hand pointing down, in from above
+            for yaw in (0.0, np.pi / 2):
+                qd = _rot(TOPDOWN[str(arm)], [0, 0, 1], yaw)
+                tip_d = np.array([tip[0], g["front"] - 0.016, hz - 0.035])
+                res = self._slide_hand(fx, arm, tip_d, qd, dq, np.array([0, 0, 0.06]), 0.0, lang, "PUSH")
+                if res is not None:
+                    return res
+            # or fingertips first, hand level (as the expert grasps the handle)
+            for q in [list(t3d.quaternions.qmult(q_fwd, t3d.quaternions.axangle2quat([1, 0, 0], r))) for r in (0.0, np.pi)]:
+                res = self._slide_hand(fx, arm, tip, q, dq, -0.03 * _hand_x(q), 0.0, lang, "PUSH")
+                if res is not None:
+                    return res
+        return None
+
+    def _push_door(self, fx, target_frac, lang):
+        """Swing a door shut by pushing on its outside near the free edge
+        (behind the handle), not by grasping the handle."""
+        j, qi = self._fixture_joint(fx)
+        lo, hi = fx.get_qlimits()[qi]
+        dq = lo + (hi - lo) * target_frac - float(fx.get_qpos()[qi])
+        T = fx.get_contact_point(FIXTURES[fx.play_name]["cps"][0], "matrix")
+        P0 = T[:3, 3]
+        t = self._moved_by(fx, T, 0.05 * np.sign(dq))[:3, 3] - P0
+        t /= np.linalg.norm(t) + 1e-9                     # the way the handle moves as it shuts
+        tip = P0 - 0.03 * t + [0, 0, float(self.prng.uniform(-0.03, 0.02))]
+        p = fx.get_pose().p
+        for arm in (self._arm_for(p), self._arm_for(p).opposite):
+            cands = [_rot(TOPDOWN[str(arm)], [0, 0, 1], y) for y in (0.0, np.pi / 2)]
+            x = np.array([t[0], t[1], 0.0]) / (np.linalg.norm(t[:2]) + 1e-9)          # fingertips first, level
+            for y in (np.array([0, 0, 1.0]), np.array([0, 0, -1.0])):
+                cands.append(list(t3d.quaternions.mat2quat(np.stack([x, y, np.cross(x, y)], 1))))
+            for q in cands:
+                appr = np.array([0, 0, 0.06]) if abs(_hand_x(q)[2]) > 0.7 else -0.04 * _hand_x(q)
+                tip_q = tip if abs(_hand_x(q)[2]) <= 0.7 else tip - [0, 0, 0.03]
+                res = self._slide_hand(fx, arm, tip_q, q, dq, appr, 0.0, lang, "PUSH")
+                if res is not None:
+                    return res
+        return None
+
     def p_open(self, fx):
         word = FIXTURES[fx.play_name]["word"]
-        if self._fixture_frac(fx) > 0.5:
+        if self._fixture_frac(fx) > (0.6 if fx.play_name == "036_cabinet" else 0.5):
             return None
         hi = {"015_laptop": (0.5, 0.65), "036_cabinet": (0.8, 0.95)}.get(fx.play_name, (0.6, 0.85))   # a lid past vertical can't be closed
+        frac = self._fixture_frac(fx)
+        force = os.environ.get("PLAY_STRATEGY")    # tests: hook / crack / push / grasp
+        if fx.play_name == "036_cabinet":
+            if frac > 0.2 and (force == "hook" or (not force and self.prng.random() < 0.7)):
+                res = self._hook_drawer(fx, float(self.prng.uniform(*hi)), f"slide the {word} out the rest of the way")
+                if res is not None:
+                    return res
+            if frac < 0.2 and (force == "crack" or (not force and self.prng.random() < 0.35)):     # just crack it open
+                return self._operate(fx, float(self.prng.uniform(0.45, 0.6)), f"pull the {word} open a little")
         return self._operate(fx, float(self.prng.uniform(*hi)), f"open the {word}")
 
     def p_close(self, fx):
         word = FIXTURES[fx.play_name]["word"]
         if self._fixture_frac(fx) < 0.3:
             return None
+        force = os.environ.get("PLAY_STRATEGY")
+        if fx.play_name == "044_microwave" and (force == "push" or (not force and self.prng.random() < 0.5)):
+            res = self._push_door(fx, 0.0, f"push the {word} shut")
+            if res is not None and not res["success"] and self._fixture_frac(fx) > 0.25:
+                # it only swung part-way: take the handle and finish
+                j, qi = self._fixture_joint(fx)
+                q_before = res.get("moved", 0.0)
+                res2 = self._operate(fx, float(self.prng.uniform(0.0, 0.05)), res["language"], again=0)
+                if res2 is not None:
+                    res2.update(strategy="push+grasp", success=bool(self._fixture_frac(fx) < 0.15))
+                    return res2
+            if res is not None:
+                return res
+        if fx.play_name == "036_cabinet" and (force == "push" or (not force and self.prng.random() < 0.6)):
+            res = self._push_drawer(fx, 0.0, f"push the {word} shut")
+            if res is not None:
+                return res
         return self._operate(fx, float(self.prng.uniform(0.0, 0.08)), f"close the {word}")
 
     def _drawer_slot(self, fx):
@@ -1522,6 +1718,58 @@ class play_table(Base_Task):
             return self._finish(actor, arm, placed, ok, lang, fixture=fx.get_name())
         finally:
             self._ignore_links = set()
+
+    def p_put_cabinet(self, actor, fx):
+        """RoboTwin's put_object_cabinet: one hand pulls the drawer open and
+        holds it, the other puts something in, then lets go."""
+        if fx.play_name != "036_cabinet" or self._fixture_frac(fx) > 0.2:
+            return None
+        c, floor, top, size = self._drawer_slot(fx)
+        lo, hi = self._aabb(actor)
+        if np.any(np.sort((hi - lo)[:2]) > np.array([0.11, 0.17])) or hi[2] - lo[2] > 0.16:
+            return None
+        obj_arm = self._arm_for(self._xy(actor))
+        hold_arm = obj_arm.opposite
+        lang = f"open the drawer and put the {self._name(actor)} in it"
+        r1 = self._operate(fx, float(self.prng.uniform(0.85, 0.95)), lang, again=0, arms=(hold_arm,), hold=True)
+        if r1 is None:
+            return None
+        if os.environ.get("PLAY_DEBUG"):
+            print(f"   PUTCAB pulled moved={r1.get('moved', 0):.2f} drawer {self._fixture_frac(fx):.2f} slot {np.round(self._drawer_slot(fx)[3], 3)}", flush=True)
+        def let_go():
+            self._run([("grip", hold_arm, 1.0)])
+            ee = self._ee(hold_arm)
+            self._go(hold_arm, [(list(ee[:3] - 0.08 * _hand_x(ee[3:])) + list(ee[3:]), None)])
+            self._home(hold_arm)
+        if not r1["success"]:
+            let_go()
+            return self._res(False, lang, f"{hold_arm}+{obj_arm}")
+        c, floor, top, size = self._drawer_slot(fx)
+        link = fx.link_dict[fx.config["contact_points"][0]["base"]].get_name()
+        self._ignore_links = {(fx, link)}
+        try:
+            pre = top - floor + 0.008          # its bottom just over the drawer's walls (the reach is tight here)
+            target = [c[0], c[1], floor + 0.004]
+            self.last_grasp = None
+            ok, _ = self._pick(actor, obj_arm, lift=top - TABLE_Z + 0.025, then=target, then_dz=(pre,), arms=(obj_arm,),
+                               home_other=False)
+            placed, inside = False, False
+            if ok:
+                placed = self._place(actor, obj_arm, target, pre, 0.02, over_extra=0.0)
+                dl, dh = (np.asarray(x) for x in fx.link_dict[link].compute_global_aabb_tight())
+                xy, bot = self._xy(actor), self._aabb(actor)[0][2]
+                inside = bool(np.all(xy > dl[:2]) and np.all(xy < dh[:2]) and bot < top - 0.02)
+                if not placed:
+                    self._put_down_here(actor, obj_arm)
+            self._home(obj_arm)
+        finally:
+            self._ignore_links = set()
+        let_go()
+        if os.environ.get("PLAY_DEBUG"):
+            print(f"   PUTCAB picked={ok} placed={placed} inside={inside} drawer {self._fixture_frac(fx):.2f}", flush=True)
+        if ok is None and not placed:
+            return self._res(False, lang, f"{hold_arm}+{obj_arm}", opened=True)
+        return self._res(inside, lang, f"{hold_arm}+{obj_arm}", fixture=fx.get_name())
 
     def p_toggle(self, fx):
         """Flip the switch with the closed hand, like RoboTwin's turn_switch:
@@ -1877,16 +2125,27 @@ class play_table(Base_Task):
         opts = []
         nov = lambda a: 1.0 / (1 + touched.get(a.get_name(), 0))
         for f in getattr(self, "fixtures", []):
-            if f.play_name == "036_cabinet" and self._fixture_frac(f) > 0.6:
+            frac = self._fixture_frac(f)
+            stowed = done.get("stow", 0) > getattr(self, "_stow_mark", 0)    # something went in since it opened
+            if f.play_name == "036_cabinet" and frac < 0.2 and done.get("put_cabinet", 0) < 2 and self.play_cfg.get("put_cabinet"):
+                # off by default: the held drawer slides back and the drop point is out of reach (see README)
                 for a in objs:
-                    opts.append((1.2 / max(1, len(objs)), "stow", (a, f)))
+                    opts.append((1.0 / max(1, len(objs)), "put_cabinet", (a, f)))
+            if f.play_name == "036_cabinet" and frac > 0.6:
+                # an open drawer invites putting something in it
+                for a in objs:
+                    opts.append((2.5 / max(1, len(objs)), "stow", (a, f)))
             w = 1.6 * nov(f)            # rarer in the scene, so likelier when there
             if f.play_name == "056_switch":
-                opts.append((w, "toggle", (f,)))
-            elif self._fixture_frac(f) < 0.5:
-                opts.append((w, "open", (f,)))
-            else:
-                opts.append((w, "close", (f,)))
+                if done.get("toggle", 0) < 3:
+                    opts.append((w, "toggle", (f,)))
+            elif frac < (0.6 if f.play_name == "036_cabinet" else 0.5):
+                if done.get("open", 0) < 2:                  # not an open-close loop
+                    opts.append((w, "open", (f,)))
+                    self._stow_mark = done.get("stow", 0)
+            elif done.get("close", 0) < 2:
+                empty_drawer = f.play_name == "036_cabinet" and not stowed and objs
+                opts.append((w * (0.35 if empty_drawer else 1.0), "close", (f,)))
         for a in objs:
             w = nov(a)
             opts.append((0.7 * w, "move", (a,)))

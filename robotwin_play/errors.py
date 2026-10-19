@@ -28,7 +28,7 @@ import os
 
 import numpy as np
 
-PICK = ("move", "put_in", "stack", "line_up", "reorient", "shake", "knock_with", "pour", "stow")
+PICK = ("move", "put_in", "stack", "line_up", "reorient", "shake", "knock_with", "pour", "stow", "put_cabinet")
 PICK_ERRORS = {"grasp_offset": 1.0, "grasp_high": 0.7, "unstable_grasp": 0.8, "close_early": 0.8, "close_late": 0.8,
                "lift_early": 0.8, "place_offset": 1.2, "drop_high": 0.8, "release_early": 0.6, "shaky": 0.45, "jitter": 0.45}
 OTHER = {"push": {"push_offset": 1.5, "shaky": 0.4, "jitter": 0.4},
