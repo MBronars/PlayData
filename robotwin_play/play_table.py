@@ -221,7 +221,7 @@ class play_table(Base_Task):
             if fx is not None:
                 lo, hi = self._aabb(fx)
                 placed.append((0.5 * (lo + hi)[:2], 0.5 * float(np.linalg.norm((hi - lo)[:2]))))
-        n_obj = int(self.prng.integers(cfg.get("min_objects", 3), cfg.get("max_objects", 5) + 1)) - (fx is not None)
+        n_obj = int(self.prng.integers(cfg.get("min_objects", 3), cfg.get("max_objects", 5) + 1))   # plenty to do besides the fixture
         names = list(self.prng.choice(GRASPABLE, size=n_obj, replace=False))
         if cfg.get("objects"):          # for tests: these objects (plus random ones up to n_obj)
             forced = list(cfg["objects"])
@@ -2136,6 +2136,7 @@ class play_table(Base_Task):
         last = getattr(self, "_last_kind", None)
         opts = []
         nov = lambda a: 1.0 / (1 + touched.get(a.get_name(), 0))
+        fx_actions = sum(done.get(k, 0) for k in ("open", "close", "toggle"))
         for f in getattr(self, "fixtures", []):
             frac = self._fixture_frac(f)
             stowed = done.get("stow", 0) > getattr(self, "_stow_mark", 0)    # something went in since it opened
@@ -2147,13 +2148,13 @@ class play_table(Base_Task):
                 # an open drawer invites putting something in it
                 for a in objs:
                     opts.append((2.5 / max(1, len(objs)), "stow", (a, f)))
-            w = 1.6 * nov(f)            # rarer in the scene, so likelier when there
+            w = 1.6 * nov(f) if fx_actions < 3 else 0.0     # rarer in the scene, so likelier there; not the whole episode
             if f.play_name == "056_switch":
                 if done.get("toggle", 0) < 3:
                     opts.append((w, "toggle", (f,)))
             elif frac < (0.6 if f.play_name == "036_cabinet" else 0.5):
                 if done.get("open", 0) < 2:                  # not an open-close loop
-                    opts.append((w * (0.4 if done.get("close", 0) else 1.0), "open", (f,)))
+                    opts.append((w * (0.25 if done.get("close", 0) else 1.0), "open", (f,)))
                     self._stow_mark = done.get("stow", 0)
             elif done.get("close", 0) < 2:
                 empty_drawer = f.play_name == "036_cabinet" and not stowed and objs
@@ -2187,7 +2188,7 @@ class play_table(Base_Task):
                 opts.append((1.0, "pour", (c,)))
         # variety: what has been done already is less likely, the same kind twice in a row even less
         skip = getattr(self, "_skip", set())    # couldn't be planned earlier in this episode
-        opts = [(w / (1 + done.get(k, 0)) * (0.3 if k == last else 1.0), k, x) for w, k, x in opts
+        opts = [(w / (1 + done.get(k, 0)) * (0.3 if k == last else 1.0), k, x) for w, k, x in opts if w > 0
                 if (k, tuple(a.get_name() for a in x)) not in skip]
         w = np.array([o[0] for o in opts])
         return opts[int(self.prng.choice(len(opts), p=w / w.sum()))] if opts else None
