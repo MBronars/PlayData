@@ -89,10 +89,24 @@ Details that matter:
   something low puts them at table height, and closing then rolls a pen.
 * Long uniform things (pens, remote, toothpaste) can also be grasped anywhere
   along their length (the annotated grasp slid along the long axis).
-* Fixtures: the hand grasps the annotated handle (or, for the laptop, the
-  lid's top edge from above) and follows the joint's own arc or slide, in
-  short planned segments; if the handle slips it grabs it again once; a lid
-  left part-way is pressed shut from above.
+* Fixtures: the hand grasps the annotated handle (at different points along
+  it; for the laptop also the lid's top edge from above) and follows the
+  joint's own arc or slide. The pull is planned in short segments and then
+  merged into one steady motion, like the expert demos' pull (hand level,
+  pointing at the handle, at handle height). If the handle slips it grabs it
+  again once; a lid left part-way is pressed shut from above. Other
+  strategies: crack the drawer open and hook the fingers in behind its front
+  to slide it out; push the drawer shut with the flat of the fingers; push
+  the microwave door shut (finishing with the handle if it only swings
+  part-way). At most three fixture actions per episode; an open drawer
+  invites putting something in it (objects turned to fit if needed). The
+  cabinet stands a little closer than in RoboTwin (y 0.115-0.145 vs 0.155) so
+  the open drawer is within reach. A RoboTwin-style hold-and-put
+  (`p_put_cabinet`, one hand holds the drawer open) exists but is off by
+  default (`play.put_cabinet`): the held drawer slides back.
+* `collect_play.py --p_fixture 1 --fixtures 036_cabinet` makes every scene
+  have that fixture; `checks/dry_episode.py` plays whole episodes without
+  rendering to check the action mix.
 
 ## Errors
 

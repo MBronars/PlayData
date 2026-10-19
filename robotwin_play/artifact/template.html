@@ -148,6 +148,7 @@ code { font: 0.86em var(--f-mono); }
       <li><b>Success in these batches:</b> clean 64% of 42 actions, mixed 79% of 29, high-error 52% of 29. Opening and closing the microwave, drawer and laptop and flipping the switch went 6 for 6 (clean) and 7 for 7 (mixed).</li>
       <li><b>Per-skill benchmark</b> (each skill on many random scenes, no rendering): push 100%, pick two at once 100%, open microwave / laptop 7/7, close microwave 7/7, close drawer 5/5, put in the open drawer 4/4 when reachable, stack 88%, put in a container 83%, switch 83%, move 80%, shake 80%, tap with a tool 80%, turn around 70%, line up 67%. Weak: closing the laptop (about a third), two-handed lift and hand-over (rarely possible in a random scene).</li>
       <li><b>Actions stay in RoboTwin's distribution:</b> 0.8&ndash;2.2% of frames have a joint outside the range of the released demos (the demos themselves 0.9%), step sizes match (99th percentile joint step 0.084&ndash;0.094 rad vs 0.098).</li>
+      <li><b>Drawer and microwave set</b> (newest): the pull now follows the expert demos' form (hand level, pointing at the handle, at handle height, one steady pull), grabs different points along the handle, and varies strategy: crack the drawer open and hook the fingers in behind its front to slide it out, push it shut with the flat of the fingers, push the microwave door shut (and finish with the handle if it only swings part-way). Fixture actions are capped at three per episode and an open drawer invites putting something in it.</li>
       <li><b>The video:</b> the robot's own head-camera viewpoint with a wider lens, so both arms and the whole table stay in frame. It is for viewing only; the dataset keeps RoboTwin's cameras (head, front, two wrists) unchanged.</li>
       <li><b>Files:</b> each episode is saved in RoboTwin's current format (<code>data/</code>) and in the format of its released datasets (<code>data_released/</code>); <code>log.jsonl</code> has the labels and the mistake on each action.</li>
     </ul>
@@ -162,7 +163,7 @@ const FPS = DATA.fps;
 const fmt = (f) => { const s = f / FPS; return `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`; };
 const tot = DATA.episodes.reduce((a, e) => [a[0] + e.segments.length, a[1] + e.segments.filter((s) => s.ok).length, a[2] + e.frames], [0, 0, 0]);
 $("#facts").innerHTML = `<span><b>${DATA.episodes.length}</b> episodes</span><span><b>${tot[0]}</b> actions, <b>${tot[1]}</b> succeeded</span><span><b>${Math.round(tot[2] / FPS / 60)}</b> min of play</span><span><b>4</b> cameras</span>`;
-const kindName = { move: "move", put_in: "put in", stack: "stack", push: "push", reorient: "turn around", handover: "hand over", line_up: "line up", press: "press", shake: "shake", knock_with: "tap with a tool", dual_pick: "pick two at once", lift_together: "lift with both hands", pour: "tip out", open: "open", close: "close", toggle: "switch" };
+const kindName = { move: "move", put_in: "put in", stack: "stack", push: "push", reorient: "turn around", handover: "hand over", line_up: "line up", press: "press", shake: "shake", knock_with: "tap with a tool", dual_pick: "pick two at once", lift_together: "lift with both hands", pour: "tip out", open: "open", close: "close", toggle: "switch", stow: "put in drawer", lift_together: "lift with both hands" };
 let cur = null;
 const vid = $("#vid"), tip = $("#tip");
 function load(i) {
@@ -197,7 +198,7 @@ function load(i) {
       <span class="pill ${s.ok ? "ok" : "no"}">${s.ok ? "done" : "failed"}</span></button>`).join("");
   document.querySelectorAll(".act").forEach((b) => b.addEventListener("click", () => { vid.currentTime = cur.segments[+b.dataset.j].s / FPS; vid.play().catch(() => {}); }));
 }
-const kindTag = { clean: "clean", mixed: "mixed", severe: "high-error" };
+const kindTag = { clean: "clean", mixed: "mixed", severe: "high-error", drawer: "drawer", microwave: "microwave" };
 $("#chips").innerHTML = DATA.episodes.map((e, i) => `<button class="chip" aria-pressed="false"><span class="k ${e.kind}">${kindTag[e.kind] || e.kind}</span> ${e.objects.slice(0, 2).join(" + ")}${e.objects.length > 2 ? " +" + (e.objects.length - 2) : ""}</button>`).join("");
 document.querySelectorAll(".chip").forEach((c, i) => c.addEventListener("click", () => load(i)));
 $("#tl").addEventListener("click", (e) => { const r = $("#tl").getBoundingClientRect(); vid.currentTime = (e.clientX - r.left) / r.width * cur.frames / FPS; });
