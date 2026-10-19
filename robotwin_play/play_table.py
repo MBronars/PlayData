@@ -54,7 +54,7 @@ FIXTURES = {
                           yaw=0.0, cps=[0, 1], props=(0.0, 0.0), word="microwave door"),
     # y: RoboTwin uses 0.155; a little closer so the open drawer is within reach. Some joint friction:
     # it stays where it is left
-    "036_cabinet": dict(ids=[46653], x=(-0.05, 0.05), y=(0.09, 0.13), z=(0.741, 0.741), q=[1, 0, 0, 1],
+    "036_cabinet": dict(ids=[46653], x=(-0.05, 0.05), y=(0.115, 0.145), z=(0.741, 0.741), q=[1, 0, 0, 1],
                         yaw=0.0, cps=[0, 1], props=(1.0, 0.0, 0.3), word="drawer"),
     "015_laptop": dict(ids=list(range(11)), x=(-0.05, 0.05), y=(-0.1, 0.05), z=(0.741, 0.741), q=[0.7, 0, 0, 0.7],
                        yaw=np.pi / 3, cps=[0, 1, 2], props=(1.0, 0.0), word="laptop"),
@@ -131,6 +131,8 @@ class play_table(Base_Task):
         self.err = None
         self.action_steps, self.action_len = 0, 2500
         super()._init_task_env_(**kwags)
+        self._rest_q = {a: np.array((self.robot.get_left_arm_jointState() if a == "left" else self.robot.get_right_arm_jointState())[:-1])
+                        for a in ("left", "right")}       # the arms' rest posture
         self._viz = None
         self._viz_cam = self._add_viz_camera() if self.save_data and kwags.get("play", {}).get("viz_video", True) else None
 
@@ -1400,8 +1402,7 @@ class play_table(Base_Task):
             moved = (q1 - q0) / dq_total if abs(dq_total) > 1e-6 else 0.0
             self.last_grasp = dict(contact_point=cp if isinstance(cp, str) else int(cp), arm=str(arm))
             return self._res(moved > 0.6, lang, arm, moved=float(moved), fixture=fx.get_name(), held=True)
-        ee = self._ee(arm)
-        self._go(arm, [(list(ee[:3] - 0.08 * _hand_x(ee[3:])) + list(ee[3:]), None)])
+        self._back_off(arm)
         self.last_grasp = dict(contact_point=cp if isinstance(cp, str) else int(cp), arm=str(arm))
         lo_, hi_ = fx.get_qlimits()[qi]
         if fx.play_name == "015_laptop" and dq_total < 0 and self._fixture_frac(fx) > target_frac + 0.08:
@@ -1426,6 +1427,35 @@ class play_table(Base_Task):
                 moved = (q2 - q0) / dq_total if abs(dq_total) > 1e-6 else 0.0
                 return self._res(moved > 0.6, lang, arm, moved=float(moved), fixture=fx.get_name(), regrasped=True)
         return self._res(moved > 0.6, lang, arm, moved=float(moved), fixture=fx.get_name())
+
+    def _back_off(self, arm, dist=0.08):
+        """Let-go retreat from a handle: straight back along the hand, else up,
+        else back and up, so the hand never leaves dragging the handle."""
+        ee = self._ee(arm)
+        x = _hand_x(ee[3:])
+        for d in (-dist * x, np.array([0, 0, 0.07]), -0.05 * x + [0, 0, 0.05], np.array([0.05, 0, 0.05]),
+                  np.array([-0.05, 0, 0.05]), -0.03 * x):
+            if self._go(arm, [(list(ee[:3] + d) + list(ee[3:]), None)]):
+                return True
+        # the planner won't start from here (the arm sits at the edge of its range after a
+        # long pull): a quarter of the way back towards the rest posture, straight in joint space
+        q = np.array((self.robot.get_left_arm_jointState() if arm == "left" else self.robot.get_right_arm_jointState())[:-1])
+        if os.environ.get("PLAY_DEBUG"):
+            box = self._joint_box(arm)
+            real = np.array((self.robot.get_left_arm_real_jointState() if arm == "left" else self.robot.get_right_arm_real_jointState())[:-1])
+            print(f"   BACKOFF {arm} q {np.round(q, 3)} real {np.round(real, 3)} box lo {np.round(box[0], 2)} hi {np.round(box[1], 2)}", flush=True)
+        q_home = self._rest_q.get(str(arm)) if hasattr(self, "_rest_q") else None
+        if q_home is None:
+            return False
+        n = 150
+        s_ = np.linspace(0, 1, n + 1)[1:]
+        s_ = 0.25 * (3 * s_ ** 2 - 2 * s_ ** 3)
+        pos = q[None] + s_[:, None] * (np.asarray(q_home) - q)[None]
+        self._sync(arm)
+        self._run([("move", arm, {"status": "Success", "position": pos, "velocity": np.gradient(pos, axis=0) * 250.0})])
+        if os.environ.get("PLAY_DEBUG"):
+            print(f"   BACKOFF {arm}: no plan, eased back in joint space", flush=True)
+        return True
 
     def _press_lid_down(self, fx, arm, dq):
         """The grasp got the lid most of the way down: press its top edge the
@@ -1551,7 +1581,8 @@ class play_table(Base_Task):
         self._run([("both", (arm, None, grip), (arm.opposite, home, None)) if home is not None else ("grip", arm, grip),
                    ("move", arm, first[0]), ("move", arm, first[1]), ("move", arm, self._merge_plans(moves)), ("grip", arm, 1.0)])
         e2 = self._ee(arm)
-        self._go(arm, [(list(e2[:3] + 0.6 * np.asarray(approach)) + list(e2[3:]), None)])
+        if not self._go(arm, [(list(e2[:3] + 0.6 * np.asarray(approach)) + list(e2[3:]), None)]):
+            self._back_off(arm)
         q1 = float(fx.get_qpos()[qi])
         moved = (q1 - q0) / dq if abs(dq) > 1e-6 else 0.0
         if os.environ.get("PLAY_DEBUG"):
@@ -1750,8 +1781,7 @@ class play_table(Base_Task):
             print(f"   PUTCAB pulled moved={r1.get('moved', 0):.2f} drawer {self._fixture_frac(fx):.2f} slot {np.round(self._drawer_slot(fx)[3], 3)}", flush=True)
         def let_go():
             self._run([("grip", hold_arm, 1.0)])
-            ee = self._ee(hold_arm)
-            self._go(hold_arm, [(list(ee[:3] - 0.08 * _hand_x(ee[3:])) + list(ee[3:]), None)])
+            self._back_off(hold_arm)
             self._home(hold_arm)
         if not r1["success"]:
             let_go()
