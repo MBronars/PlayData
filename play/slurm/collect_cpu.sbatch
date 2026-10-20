@@ -22,7 +22,10 @@ PER_TASK=${PER_TASK:-100}; EXTRA=${EXTRA:-}
 PY=${PY:-/data/user_data/mbronars/.miniconda3/envs/mcts/bin/python}
 export LIBERO_REF=${LIBERO_REF:-/data/user_data/mbronars/AgenticExploration/libero_ref}
 export MUJOCO_GL=glx PYTHONHASHSEED=0 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1
-cd "$(dirname "$(scontrol show job "$SLURM_JOB_ID" | grep -oP 'Command=\K\S+')")/.."
+# this script's play/ folder (PLAY_DIR to override). For the last task of an array scontrol lists every task of the
+# array, so take the first Command= line only.
+PLAY_DIR=${PLAY_DIR:-$(dirname "$(scontrol show job "$SLURM_JOB_ID" | grep -oP 'Command=\K\S+' | head -1)")/..}
+cd "$PLAY_DIR"
 START=$((SLURM_ARRAY_TASK_ID * PER_TASK))
 echo "host $(hostname) task $SLURM_ARRAY_TASK_ID episodes $START..$((START + PER_TASK - 1)) seed $SEED out $OUT $(date)"
 $PY collect.py --mode composed --img 0 --videos 0 --out "$OUT" --seed "$SEED" --start "$START" --episodes "$PER_TASK" \
