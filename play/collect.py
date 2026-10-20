@@ -111,8 +111,13 @@ def run_episode(ep, args):
     bddl_path = os.path.join(args.out, "bddl", f"episode_{ep:06d}.bddl")
     names = write_bddl(cfg, bddl_path)
 
-    env = OffScreenRenderEnv(bddl_file_name=bddl_path, camera_heights=args.img,
-                             camera_widths=args.img, ignore_done=True, horizon=10 ** 6)
+    if args.img > 0:
+        env = OffScreenRenderEnv(bddl_file_name=bddl_path, camera_heights=args.img,
+                                 camera_widths=args.img, ignore_done=True, horizon=10 ** 6)
+    else:                       # no cameras and no GL context: runs on CPU-only nodes (render later: render_from_states.py)
+        from libero.libero.envs.env_wrapper import ControlEnv
+        env = ControlEnv(bddl_file_name=bddl_path, has_renderer=False, has_offscreen_renderer=False,
+                         use_camera_obs=False, ignore_done=True, horizon=10 ** 6)
     env.seed(seed)
     env.reset()
     if args.mode in ("human", "composed", "humanpath"):
@@ -128,8 +133,9 @@ def run_episode(ep, args):
     def record(obs, a, pc):
         buf["actions"].append(a.astype(np.float32))
         buf["states"].append(pc.sim.get_state().flatten())
-        buf["agentview_rgb"].append(obs["agentview_image"])
-        buf["eye_in_hand_rgb"].append(obs["robot0_eye_in_hand_image"])
+        if args.img > 0:
+            buf["agentview_rgb"].append(obs["agentview_image"])
+            buf["eye_in_hand_rgb"].append(obs["robot0_eye_in_hand_image"])
         buf["ee_pos"].append(obs["robot0_eef_pos"])
         buf["ee_ori"].append(quat2axisangle(obs["robot0_eef_quat"]))
         buf["gripper_states"].append(obs["robot0_gripper_qpos"])
@@ -200,7 +206,7 @@ def run_episode(ep, args):
         d.create_dataset("dones", data=np.eye(1, T, T - 1, dtype=np.uint8)[0])
         d.create_dataset("rewards", data=np.zeros(T, np.uint8))
         o = d.create_group("obs")
-        for k in ["agentview_rgb", "eye_in_hand_rgb"]:
+        for k in ["agentview_rgb", "eye_in_hand_rgb"] if args.img > 0 else []:
             o.create_dataset(k, data=np.array(buf[k], np.uint8), compression="lzf",
                              chunks=(1, args.img, args.img, 3))
         for k in ["ee_pos", "ee_ori", "gripper_states", "joint_states"]:
@@ -211,7 +217,7 @@ def run_episode(ep, args):
         o.create_dataset("object_states", data=np.array(buf["object_states"], np.float32))
     os.replace(tmp, out_h5)
 
-    if args.videos and ep < args.videos:
+    if args.videos and ep < args.videos and args.img > 0:
         import imageio
         frames = [np.concatenate([a[::-1], b[::-1]], 1)
                   for a, b in zip(buf["agentview_rgb"], buf["eye_in_hand_rgb"])]
@@ -240,7 +246,7 @@ def main():
     p.add_argument("--start", type=int, default=0)
     p.add_argument("--workers", type=int, default=8)
     p.add_argument("--seed", type=int, default=0)
-    p.add_argument("--img", type=int, default=128)
+    p.add_argument("--img", type=int, default=128, help="camera resolution; 0 = no cameras (CPU-only nodes, MUJOCO_GL=glx)")
     p.add_argument("--max_steps", type=int, default=1200)
     p.add_argument("--max_primitives", type=int, default=12)
     p.add_argument("--err_severity", type=float, default=0.15, help="fraction of injected errors that are large and obvious")

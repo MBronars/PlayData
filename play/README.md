@@ -67,6 +67,22 @@ data/demo_0/
                    diag (grasp type, distances, ...)
 ```
 
+## Collecting on CPU-only nodes
+
+`--img 0` builds the env without cameras or a GL context, so collection runs on CPU nodes (`MUJOCO_GL=glx`).
+Episodes are bit-identical to a camera run with the same seed, on the same or another machine
+(`python checks/compare_episodes.py RUN_A RUN_B`). Render the cameras afterwards on any GPU node:
+
+```
+MUJOCO_GL=egl python render_from_states.py OUT --img 128 --workers 4
+```
+
+It rebuilds each episode's scene, steps every saved state back one physics step (live rendering draws the poses from
+before `mj_step`'s last position update) and writes `obs/agentview_rgb` / `obs/eye_in_hand_rgb`. Against live
+renders of the same episodes the images are identical, or differ in under 0.2% of pixels when the collector edited
+the scene after building it (the stored MuJoCo XML is then used). Batch collection on `katef-cpu`:
+`slurm/collect_cpu.sbatch` (usage in its header).
+
 ## Reproducing the showcase sets
 
 ```
