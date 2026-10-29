@@ -95,7 +95,7 @@ def run_episode(ep, args):
     import h5py
     from libero.libero.envs import OffScreenRenderEnv
     from robosuite.utils.transform_utils import quat2axisangle
-    from scene_gen import sample_scene, write_bddl
+    from scene_gen import sample_scene, write_bddl, set_reach
     from play_controller import PlayController
 
     seed = args.seed * 100003 + ep
@@ -108,6 +108,9 @@ def run_episode(ep, args):
         if args.fixture is None or cfg["fixture"] == args.fixture:
             break
         cfg = sample_scene(rng, scene=args.scene)
+    set_reach(cfg["scene"])
+    from play_tasks import set_task_weights
+    set_task_weights(cfg["scene"])
     bddl_path = os.path.join(args.out, "bddl", f"episode_{ep:06d}.bddl")
     names = write_bddl(cfg, bddl_path)
 
@@ -240,7 +243,7 @@ def worker(args, eps, q):
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--out", required=True)
-    p.add_argument("--scene", default=None, help="kitchen / living_room / study (default: random)")
+    p.add_argument("--scene", default=None, help="kitchen / living_room / study / floor (default: random table scene)")
     p.add_argument("--fixture", default=None, help="force a fixture, e.g. flat_stove, microwave, white_cabinet")
     p.add_argument("--episodes", type=int, default=10)
     p.add_argument("--start", type=int, default=0)

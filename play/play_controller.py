@@ -111,7 +111,7 @@ class PlayController:
         """Height of the table surface, ray-cast onto the table fixture's own
         geoms (LIBERO's workspace offset is off by ~3 cm in some scenes)."""
         m, d = self.m, self.d
-        tb = [b for b in range(m.nbody) if "table" in m.body(b).name]
+        tb = [b for b in range(m.nbody) if "table" in m.body(b).name or m.body(b).name == "floor"]
         roots = {m.body_rootid[b] for b in tb}
         x0, y0, z0 = self.e.workspace_offset
         hits = []

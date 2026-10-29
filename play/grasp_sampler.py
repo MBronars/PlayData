@@ -12,6 +12,7 @@ pose backed off along the approach axis must be clear too."""
 import numpy as np
 
 from human_play import GEOM, GROUP_OF
+from scene_gen import REACH
 
 GRIP_MAX = 0.066        # comfortable opening between the fingers' collision hulls
 GRIP_HARD = 0.072       # widest closing width tried (humans grab 6.4 cm cans); exact clearance check decides
@@ -435,7 +436,7 @@ class GraspSampler:
 
     def candidates(self, n, k=10):
         grp = GROUP_OF.get(self.p.cat(n))
-        near_body = np.linalg.norm(self.p.obj_pose(n)[0][:2] - np.array(self.pc.robot.base_pos)[:2]) < 0.48
+        near_body = np.linalg.norm(self.p.obj_pose(n)[0][:2] - np.array(self.pc.robot.base_pos)[:2]) < REACH[0] + 0.01
         if self.p.rng.random() < self.p_unusual and not getattr(self.p, "_no_unusual", False) and not near_body:
             # trying it a different way: by the handle, or from the side
             un = self.handle_grasps(n) + self.side_grasps(n)

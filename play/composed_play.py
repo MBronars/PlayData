@@ -9,6 +9,7 @@ from errors import has as _has
 from compose import Composer, R_DOWN, rotz, wrap, rot_err
 from human_play import GEOM, GROUP_OF, quat_to_mat, top_center, bottom_offset, RECEPTACLE_GROUPS
 from play_controller import EpisodeTooLong
+from scene_gen import REACH
 
 RIM = {"bowl", "mug", "plate"}
 
@@ -521,8 +522,8 @@ class ComposedPlay:
     def _free_spot(self, n, tries=60, min_move=0.08):
         pc = self.pc
         from scene_gen import OBJ_XY
-        sc = {"kitchen_table": "kitchen", "living_room_table": "living_room", "study_table": "study"}
-        tname = next((f for f in pc.e.fixtures_dict if f.endswith("table")), "kitchen_table")
+        sc = {"kitchen_table": "kitchen", "living_room_table": "living_room", "study_table": "study", "floor": "floor"}
+        tname = next((f for f in pc.e.fixtures_dict if f.endswith("table") or f == "floor"), "kitchen_table")
         (xl, xh), (yl, yh) = OBJ_XY.get(sc.get(tname, "kitchen"))
         x0, y0 = pc.e.workspace_offset[:2]
         p_now, _ = self.obj_pose(n)
@@ -594,7 +595,7 @@ class ComposedPlay:
             if m == n or self.support_of(m) is not None or self.support_of(m) == n or GROUP_OF.get(self.cat(m)) is None:
                 continue
             pm = self.obj_pose(m)[0]
-            if np.linalg.norm(pm[:2] - np.array(pc.robot.base_pos)[:2]) < 0.45:
+            if np.linalg.norm(pm[:2] - np.array(pc.robot.base_pos)[:2]) < REACH[0] - 0.02:
                 continue
             # distance from the segment start->goal
             d = goal[:2] - p0[:2]
@@ -623,7 +624,7 @@ class ComposedPlay:
         u = u / np.linalg.norm(u) if np.linalg.norm(u) > 1e-6 else np.r_[1.0, 0.0]
         r = self._radius(n) * 0.7 + self._radius(m) * 0.7 - overlap
         xy = pm[:2] + u * max(r, 0.01)
-        if not (0.47 < np.linalg.norm(xy - np.array(pc.robot.base_pos)[:2]) < 0.62):
+        if not (REACH[0] < np.linalg.norm(xy - np.array(pc.robot.base_pos)[:2]) < REACH[1]):
             return None
         return np.r_[xy, goal[2]], m
 

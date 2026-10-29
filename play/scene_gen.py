@@ -24,6 +24,10 @@ SCENES = {
                         fixtures=[None]),
     "study": dict(table="study_table", problem="LIBERO_Study_Tabletop_Manipulation",
                   fixtures=[None, "wooden_cabinet", "white_cabinet"]),
+    # LIBERO's floor arena with a fixed small object set (adaptive_ttc's custom calibration scene, without a plate):
+    # three graspables and a basket spawned anywhere in the reachable workspace
+    "floor": dict(table="floor", problem="LIBERO_Floor_Manipulation", fixtures=[None],
+                  objects=["alphabet_soup", "cream_cheese", "milk", "basket"]),
 }
 
 # Object area in table frame (robot sits at -x looking toward +x): broad, only
@@ -31,11 +35,20 @@ SCENES = {
 OBJ_X = (-0.20, 0.12)
 OBJ_Y = (-0.25, 0.25)
 # robot base in the table (workspace) frame, and how far from it objects may spawn
-BASE_XY = {"kitchen": (-0.66, 0.0), "living_room": (-0.51, 0.0), "study": (-0.55, 0.0)}
+BASE_XY = {"kitchen": (-0.66, 0.0), "living_room": (-0.51, 0.0), "study": (-0.55, 0.0), "floor": (-0.6, 0.0)}
 REACH_MAX = 0.62
 OBJ_XY = {"kitchen": ((-0.22, 0.10), (-0.28, 0.28)),
           "living_room": ((-0.25, 0.12), (-0.28, 0.25)),
-          "study": ((-0.08, 0.18), (-0.28, 0.22))}
+          "study": ((-0.08, 0.18), (-0.28, 0.22)),
+          "floor": ((-0.28, 0.08), (-0.28, 0.28))}      # the calibration scene's spawn region
+# Comfortable distance band from the robot base for objects and destinations. The floor scene uses the whole region
+# pi0.5 is evaluated on (objects 0.32-0.74 m from the base) instead of the table scenes' top-down sweet spot.
+REACH_BAND = {"floor": (0.33, 0.70)}
+REACH = list(REACH_BAND.get(None, (0.47, 0.62)))     # [lo, hi] of the current episode (set_reach)
+
+
+def set_reach(scene):
+    REACH[:] = REACH_BAND.get(scene, (0.47, 0.62))
 # Fixtures go to the side/back so they don't eat the whole workspace.
 # LIBERO fixture placements (table frame); human clips transfer with translation only.
 _PI = np.pi
@@ -62,13 +75,16 @@ def _region(name, target, x, y, half, yaw):
 
 
 def sample_scene(rng, n_objects=None, scene=None):
-    scene = scene or rng.choice(list(SCENES))
+    scene = scene or rng.choice([k for k in SCENES if "objects" not in SCENES[k]])   # the table scenes
     spec = SCENES[scene]
     fixture = spec["fixtures"][rng.integers(len(spec["fixtures"]))]
-    n_obj = n_objects or int(rng.integers(3, 7))
-    n_rec = int(rng.integers(0, 2)) if n_obj >= 3 else 0
-    objs = list(rng.choice(GRASPABLE, size=n_obj - n_rec, replace=False))
-    objs += list(rng.choice(RECEPTACLES, size=n_rec, replace=False))
+    if "objects" in spec:
+        objs = list(spec["objects"])
+    else:
+        n_obj = n_objects or int(rng.integers(3, 7))
+        n_rec = int(rng.integers(0, 2)) if n_obj >= 3 else 0
+        objs = list(rng.choice(GRASPABLE, size=n_obj - n_rec, replace=False))
+        objs += list(rng.choice(RECEPTACLES, size=n_rec, replace=False))
     if fixture == "flat_stove" and rng.random() < 0.85:
         # something to cook with
         objs = ["moka_pot"] + objs[:-1]
@@ -79,6 +95,7 @@ def sample_scene(rng, n_objects=None, scene=None):
 
     # Rejection-sample object centers with min spacing.
     placed, kept = [], []
+    lo, hi = REACH_BAND.get(scene, (0.47, REACH_MAX))
     for o in objs:
         r = 0.09 if o in RECEPTACLES else 0.06
         for _ in range(200):
@@ -92,7 +109,7 @@ def sample_scene(rng, n_objects=None, scene=None):
                 elif abs(y - fy) < FIXTURE_YKEEPOUT:
                     continue
             bx, by = BASE_XY[scene]
-            if not (0.47 < np.hypot(x - bx, y - by) < REACH_MAX):
+            if not (lo < np.hypot(x - bx, y - by) < hi):
                 continue  # beyond a comfortable top-down reach (or under the robot)
             if all(np.hypot(x - px, y - py) > r + pr for px, py, pr in placed):
                 placed.append((x, y, r))

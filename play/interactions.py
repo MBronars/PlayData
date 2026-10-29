@@ -11,6 +11,7 @@ import numpy as np
 
 from compose import rotz
 from human_play import GEOM, bottom_offset
+from scene_gen import REACH
 
 
 def _nice(n):
@@ -99,7 +100,7 @@ class InteractionPlay:
                 continue
             pre = pc.eef_pos + shift
             # keep the hand out of the folded-up zone next to the robot
-            if np.linalg.norm(pre[:2] - np.array(pc.robot.base_pos)[:2]) < 0.40:
+            if np.linalg.norm(pre[:2] - np.array(pc.robot.base_pos)[:2]) < REACH[0] - 0.07:
                 continue
             dist = np.linalg.norm(pre - pc.eef_pos)
             T = float(np.clip(1.2 + 3.5 * dist, 1.2, 3.5))
@@ -210,7 +211,7 @@ class InteractionPlay:
         xy = hinge_t + 2 * (pg_t - hinge_t) * frac
         # must be on the table, reachable, and clear of everything but the door
         base = np.array(pc.robot.base_pos)[:2]
-        if not (0.47 < np.linalg.norm(xy - base) < 0.62):
+        if not (REACH[0] < np.linalg.norm(xy - base) < REACH[1]):
             return None
         return xy, th
 

@@ -13,6 +13,7 @@ from interactions import InteractionPlay
 from creative import CreativePlay
 from compose import R_DOWN, rotz, wrap
 from human_play import GEOM, GROUP_OF, top_center, bottom_offset, quat_to_mat
+from scene_gen import REACH
 
 CONTAINERS = {"basket", "container"}
 HOLDERS = {"basket", "container", "plate", "bowl"}
@@ -26,7 +27,15 @@ FAMILY = {"move": "shuffle", "reorient": "shuffle", "push": "shuffle",
           "drawer": "fixture", "stove": "fixture", "microwave": "fixture",
           "push_with": "contact", "line_up": "arrange", "tower": "arrange",
           "reach_toward": "idle", "pick_fumble": "idle", "push_into ": "contact",
-          "bump": "contact"}
+          "bump": "contact", "place_rel": "arrange", "topple": "contact"}
+# weights of the relational placements and the deliberate knock-overs (0 = off, as in the table-scene data)
+W_REL, W_TOPPLE = 0.0, 0.0
+
+
+def set_task_weights(scene):
+    """The floor calibration scene plays out its evaluation relations (next to / behind / ...) and knock-overs."""
+    global W_REL, W_TOPPLE
+    W_REL, W_TOPPLE = (0.35, 0.5) if scene == "floor" else (0.0, 0.0)
 
 
 def nice(n):
@@ -340,7 +349,15 @@ class PlayfulPlay(CreativePlay, InteractionPlay, FixturePlay, ComposedPlay):
         self.checked_move([(self.rng.uniform(1.0, 1.5), pc.eef_pos + np.r_[0, 0, 0.0])], R_grasp, 1.0, moving=moving)
         return True
 
-    def p_push(self, n, direction=None, into=None):
+    def p_topple(self, n):
+        """Knock a tall standing thing over on purpose: push it near its top."""
+        info = self.p_push(n, where="high")
+        if info is not None:
+            info.update(primitive="topple", language=f"knock the {nice(n)} over")
+            info["success"] = bool(not self.upright(n))
+        return info
+
+    def p_push(self, n, direction=None, into=None, where=None):
         """Slide the object across the table with a closed gripper: come down
         behind it, push 8-20 cm toward free space, lift away. Contact only with
         the target; the object's swept footprint must stay clear of others."""
@@ -385,7 +402,7 @@ class PlayfulPlay(CreativePlay, InteractionPlay, FixturePlay, ComposedPlay):
                     continue
                 # keep it where it can still be played with afterwards
                 base = np.array(pc.robot.base_pos)[:2]
-                if not (0.48 < np.linalg.norm(end[:2] - base) < 0.62):
+                if not (REACH[0] + 0.01 < np.linalg.norm(end[:2] - base) < REACH[1]):
                     continue
                 sw = self.cc.swept_clearance(geoms, [d * x for x in np.linspace(0, dist, 6)], {n} | hit | {m_ for m_ in pc.names if self.support_of(m_) == n})
                 if sw[0] < 0.008:
@@ -402,7 +419,8 @@ class PlayfulPlay(CreativePlay, InteractionPlay, FixturePlay, ComposedPlay):
         # how to push it: low down, in the middle or up high on the object
         # (high on a tall thing can tip it over), fingers closed or open, with
         # the flat of the hand or its narrow side
-        where = self.rng.choice(["low", "middle", "high"], p=[0.35, 0.35, 0.3]) if into is None else "low"
+        if where is None:
+            where = self.rng.choice(["low", "middle", "high"], p=[0.35, 0.35, 0.3]) if into is None else "low"
         frac = {"low": 0.2, "middle": 0.5, "high": 0.85}[where]
         zc = pc.table_z + max(0.012, min(frac * h, h - 0.006)) + 0.004
         grip_push = 1.0 if self.rng.random() < 0.7 else -1.0
@@ -417,11 +435,11 @@ class PlayfulPlay(CreativePlay, InteractionPlay, FixturePlay, ComposedPlay):
                 start[:2] += np.r_[-d[1], d[0]] * e_["offset"]
             # the hand stays out of the folded-up zone next to the robot
             base_ = np.array(pc.robot.base_pos)[:2]
-            if np.linalg.norm(start[:2] - base_) < 0.47:
+            if np.linalg.norm(start[:2] - base_) < REACH[0]:
                 self.plan_log.append(("push", "too close to the body"))
                 continue
             # nor out at full stretch (the arm ends up straight and stuck)
-            if np.linalg.norm(start[:2] - base_) > 0.64:
+            if np.linalg.norm(start[:2] - base_) > REACH[1] + 0.02:
                 self.plan_log.append(("push", "too far"))
                 continue
             # fingers closed, palm face perpendicular to the push
@@ -538,9 +556,9 @@ class PlayfulPlay(CreativePlay, InteractionPlay, FixturePlay, ComposedPlay):
         objs = [n for n in pc.names if GROUP_OF.get(self.cat(n)) is not None
                 and (self.support_of(n) is None or self.rel_R(n)[2, 2] > 0.5)
                 # right up against the robot: reaching there folds the arm up
-                and np.linalg.norm(self.obj_pose(n)[0][:2] - base_xy) > 0.44
+                and np.linalg.norm(self.obj_pose(n)[0][:2] - base_xy) > REACH[0] - 0.03
                 # pushed out of reach: only at full stretch (where the arm gets stuck)
-                and self._near_dist(n, base_xy) < 0.62
+                and self._near_dist(n, base_xy) < REACH[1]
                 # fallen off the table
                 and self.obj_pose(n)[0][2] > pc.table_z - 0.03]
         last = self.segments[-1]["target"] if self.segments else ""
@@ -595,6 +613,17 @@ class PlayfulPlay(CreativePlay, InteractionPlay, FixturePlay, ComposedPlay):
                     T.append((0.3 * nv, "push_with", n, m2))
             if mq_ is not None and sup is None:
                 T.append((1.4 * nv, "door_sweep", n, None))
+            # relations to another object ("put the milk behind the basket"), one side drawn per pair
+            if W_REL > 0 and not is_cont and sup is None:
+                for m2 in objs:
+                    if m2 != n and self.support_of(m2) is None:
+                        rel = ("behind", "in_front", "left", "right", "next_to")[int(self.rng.integers(5))]
+                        T.append((W_REL * nv, "place_rel", n, (m2, rel)))
+            # knocking a tall standing thing over on purpose
+            if W_TOPPLE > 0 and sup is None and not is_cont and self.upright(n) and self.cat(n) in GEOM:
+                hh = pc.obj_bbox(n); hh = float(hh["hi"][2] - hh["lo"][2])
+                if hh > 0.07:
+                    T.append((W_TOPPLE * nv, "topple", n, None))
             T.append((0.05 * nv, "reach", n, None))
             T.append((0.025 * nv, "fumble", n, None))
         # arrangements of several things: a row, a little tower
@@ -714,7 +743,7 @@ class PlayfulPlay(CreativePlay, InteractionPlay, FixturePlay, ComposedPlay):
         if q7 + mag < 2.6 and self.rng.random() < 0.5:
             turn = -mag
         p, _ = self.obj_pose(n)
-        near_base = np.linalg.norm(p[:2] - np.array(pc.robot.base_pos)[:2]) < 0.45
+        near_base = np.linalg.norm(p[:2] - np.array(pc.robot.base_pos)[:2]) < REACH[0] - 0.02
         if self.rng.random() < 0.5 and not near_base:
             xy = p[:2] + self.rng.normal(0, 0.015, 2)
         else:
@@ -811,6 +840,10 @@ class PlayfulPlay(CreativePlay, InteractionPlay, FixturePlay, ComposedPlay):
                 info["success"] = bool(info.get("grasped")) and len(out) > 0
                 info["dumped"] = out
             return info
+        if kind == "place_rel":
+            return self.p_place_rel(a, b[0], b[1])
+        if kind == "topple":
+            return self.p_topple(a)
         if kind == "push":
             return self.p_push(a)
         if kind == "reach":

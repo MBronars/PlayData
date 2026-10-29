@@ -36,7 +36,7 @@ the held object plow through loose objects (up to 4 cm of overlap) on the way.
 """
 import numpy as np
 
-PICK = ("move", "put_in", "take_out", "stack", "reorient", "put_on_fixture", "put_in_drawer",
+PICK = ("move", "place_rel", "put_in", "take_out", "stack", "reorient", "put_on_fixture", "put_in_drawer",
         "line_up", "tower", "bump_with", "push_with", "door_sweep")
 SEVERE_PICK_EXTRA = {"knock_over": 1.4}
 PICK_ERRORS = {"grasp_offset": 1.0, "grasp_high": 0.7, "unstable_grasp": 0.8, "close_early": 0.8,
@@ -50,14 +50,14 @@ OTHER_ERRORS = {"shaky": 1.0, "jitter": 1.0}
 def sample_error(rng, kind, p_err=0.3, severity=0.0):
     import os
     forced = os.environ.get("FORCE_ERROR")
-    noise_only = kind not in PICK and kind not in ("push", "push_into", "drawer")
+    noise_only = kind not in PICK and kind not in ("push", "push_into", "topple", "drawer")
     # actions that can only get noise (knobs, doors, reaches) get it less often:
     # noise could be added to anything, it shouldn't be on everything
     if not forced and rng.random() >= p_err * (0.35 if noise_only else 1.0):
         return None
     if kind in PICK:
         table = PICK_ERRORS
-    elif kind in ("push", "push_into"):
+    elif kind in ("push", "push_into", "topple"):
         table = PUSH_ERRORS
     elif kind == "drawer":
         table = DRAWER_ERRORS
